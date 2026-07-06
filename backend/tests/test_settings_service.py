@@ -106,3 +106,19 @@ def test_preferences_roundtrip(session):
     assert svc.get_preference(session, "missing") is None
     svc.set_preference(session, "max_sources", {"value": 30})
     assert svc.get_preference(session, "max_sources") == {"value": 30}
+
+
+def test_get_mcp_server_env_returns_decrypted(session):
+    from app.services import settings_service as svc
+
+    server = svc.create_mcp_server(
+        session,
+        name="bocha",
+        transport="stdio",
+        command="npx",
+        args=["-y", "bocha-mcp"],
+        env={"BOCHA_API_KEY": "bk-123"},
+    )
+
+    assert svc.get_mcp_server_env(session, server.id) == {"BOCHA_API_KEY": "bk-123"}
+    assert svc.get_mcp_server_env(session, 99999) == {}
