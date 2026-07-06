@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 
@@ -110,3 +112,71 @@ def test_ensure_default_bocha_server_does_not_overwrite_existing(session):
     servers = [s for s in svc.list_mcp_servers(session) if s["name"] == "bocha"]
     assert len(servers) == 1
     assert servers[0]["command"] == "custom-command"
+
+
+def test_load_mcp_tools_aggregates_across_servers(session, monkeypatch):
+    from app.services import settings_service as svc
+    from app.tools import mcp_client
+
+    svc.create_mcp_server(
+        session, name="server-a", transport="stdio",
+        command="cmd-a", args=[],
+    )
+    svc.create_mcp_server(
+        session, name="server-b", transport="stdio",
+        command="cmd-b", args=[],
+    )
+
+    class FakeClient:
+        def __init__(self, connections):
+            assert len(connections) == 1
+            self._server_name = next(iter(connections))
+
+        async def get_tools(self):
+            return [f"TOOL_FROM_{self._server_name}"]
+
+    monkeypatch.setattr(mcp_client, "MultiServerMCPClient", FakeClient)
+
+    tools, errors = asyncio.run(mcp_client.load_mcp_tools(session))
+
+    assert sorted(tools) == ["TOOL_FROM_server-a", "TOOL_FROM_server-b"]
+    assert errors == []
+
+
+def test_load_mcp_tools_isolates_failing_server(session, monkeypatch):
+    from app.services import settings_service as svc
+    from app.tools import mcp_client
+
+    svc.create_mcp_server(
+        session, name="good-server", transport="stdio",
+        command="cmd-good", args=[],
+    )
+    svc.create_mcp_server(
+        session, name="bad-server", transport="stdio",
+        command="cmd-bad", args=[],
+    )
+
+    class FakeClient:
+        def __init__(self, connections):
+            self._server_name = next(iter(connections))
+
+        async def get_tools(self):
+            if self._server_name == "bad-server":
+                raise RuntimeError("connection refused")
+            return ["GOOD_TOOL"]
+
+    monkeypatch.setattr(mcp_client, "MultiServerMCPClient", FakeClient)
+
+    tools, errors = asyncio.run(mcp_client.load_mcp_tools(session))
+
+    assert tools == ["GOOD_TOOL"]
+    assert errors == [{"server": "bad-server", "error": "connection refused"}]
+
+
+def test_load_mcp_tools_no_servers_returns_empty(session):
+    from app.tools import mcp_client
+
+    tools, errors = asyncio.run(mcp_client.load_mcp_tools(session))
+
+    assert tools == []
+    assert errors == []

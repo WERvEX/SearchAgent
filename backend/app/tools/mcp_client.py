@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.services import settings_service as svc
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 # langchain-mcp-adapters expects "streamable_http" as the transport literal
 # for remote HTTP servers; accept the shorter "http" as a user-facing alias.
@@ -59,3 +60,25 @@ def ensure_default_bocha_server(session: Session, api_key: str) -> None:
         args=["-y", BOCHA_NPM_PACKAGE],
         env={"BOCHA_API_KEY": api_key},
     )
+
+
+async def load_mcp_tools(session: Session) -> tuple[list, list[dict]]:
+    """Load LangChain tools from every enabled MCP server.
+
+    Each server gets its own MultiServerMCPClient so one unreachable or
+    misconfigured server does not prevent tools from the others from
+    loading. Failures are collected (not raised) so callers can surface
+    them to the user while still using whatever tools did load.
+    """
+    tools: list = []
+    errors: list[dict] = []
+
+    for name, connection in build_mcp_connections(session).items():
+        try:
+            client = MultiServerMCPClient({name: connection})
+            server_tools = await client.get_tools()
+            tools.extend(server_tools)
+        except Exception as exc:  # noqa: BLE001 - isolate per-server failures
+            errors.append({"server": name, "error": str(exc)})
+
+    return tools, errors
