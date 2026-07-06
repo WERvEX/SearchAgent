@@ -90,3 +90,22 @@ def test_project_plan_step_source_chain(session):
     assert len(project.acceptance_criteria) == 1
     assert len(project.sources) == 1
     assert len(project.reports) == 1
+
+
+def test_sqlite_foreign_keys_enforced(session):
+    from sqlalchemy import text
+
+    result = session.execute(text("PRAGMA foreign_keys")).scalar()
+    assert result == 1
+
+
+def test_created_at_is_naive_utc(session):
+    from app.db.models import Conversation
+
+    conv = Conversation(title="tz check")
+    session.add(conv)
+    session.commit()
+    session.refresh(conv)
+
+    # Stored/loaded datetime must be naive so comparisons never raise.
+    assert conv.created_at.tzinfo is None

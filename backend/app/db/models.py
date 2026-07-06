@@ -8,7 +8,7 @@ from app.db.base import Base
 
 
 def _now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 
 
 class Conversation(Base):
