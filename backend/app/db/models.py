@@ -180,7 +180,6 @@ class MCPServer(Base):
     args_json: Mapped[Optional[list]] = mapped_column(JSON, default=None)
     env_json: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
     url: Mapped[Optional[str]] = mapped_column(default=None)
-    secret_encrypted: Mapped[Optional[str]] = mapped_column(Text, default=None)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
