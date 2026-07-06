@@ -1,3 +1,5 @@
+import asyncio
+
 from sqlalchemy.orm import Session
 
 from app.services import settings_service as svc
@@ -63,22 +65,33 @@ def ensure_default_bocha_server(session: Session, api_key: str) -> None:
 
 
 async def load_mcp_tools(session: Session) -> tuple[list, list[dict]]:
-    """Load LangChain tools from every enabled MCP server.
+    """Load LangChain tools from every enabled MCP server, concurrently.
 
     Each server gets its own MultiServerMCPClient so one unreachable or
     misconfigured server does not prevent tools from the others from
-    loading. Failures are collected (not raised) so callers can surface
-    them to the user while still using whatever tools did load.
+    loading. Servers are loaded concurrently so total load time is bounded
+    by the slowest server, not the sum of all of them. Failures are
+    collected (not raised) so callers can surface them to the user while
+    still using whatever tools did load.
     """
-    tools: list = []
-    errors: list[dict] = []
-
-    for name, connection in build_mcp_connections(session).items():
+    async def _load_one(name: str, connection: dict):
         try:
             client = MultiServerMCPClient({name: connection})
             server_tools = await client.get_tools()
-            tools.extend(server_tools)
+            return server_tools, None
         except Exception as exc:  # noqa: BLE001 - isolate per-server failures
-            errors.append({"server": name, "error": str(exc)})
+            return [], {"server": name, "error": str(exc)}
+
+    connections = build_mcp_connections(session)
+    results = await asyncio.gather(
+        *(_load_one(name, connection) for name, connection in connections.items())
+    )
+
+    tools: list = []
+    errors: list[dict] = []
+    for server_tools, error in results:
+        tools.extend(server_tools)
+        if error is not None:
+            errors.append(error)
 
     return tools, errors
