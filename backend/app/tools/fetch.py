@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 
 DEFAULT_MAX_CHARS = 20000
 DEFAULT_TIMEOUT = 10.0
+DEFAULT_MAX_RESPONSE_BYTES = 2_000_000  # 2 MB; guards against huge/pathological pages
 
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -35,6 +36,8 @@ def fetch_url(
     try:
         response = http_client.get(url)
         response.raise_for_status()
+        if len(response.content) > DEFAULT_MAX_RESPONSE_BYTES:
+            return f"Error fetching {url}: response too large (> {DEFAULT_MAX_RESPONSE_BYTES} bytes)"
         text = _extract_text(response.text)
         return text[:max_chars]
     except Exception as exc:  # noqa: BLE001 - surface any fetch error to the caller

@@ -77,3 +77,52 @@ def test_fetch_page_tool_delegates_to_fetch_url(monkeypatch):
 
     assert result == "FAKE_PAGE_TEXT"
     assert captured["url"] == "https://example.com/page"
+
+
+def test_fetch_url_closes_self_created_client(monkeypatch):
+    from app.tools import fetch
+
+    closed = {"value": False}
+
+    class _TrackingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url):
+            return httpx.Response(200, text="<html><body>hi</body></html>")
+
+        def close(self):
+            closed["value"] = True
+
+    monkeypatch.setattr(fetch.httpx, "Client", _TrackingClient)
+
+    fetch.fetch_url("https://example.com")
+
+    assert closed["value"] is True
+
+
+def test_fetch_url_leaves_injected_client_open():
+    from app.tools import fetch
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><body>hi</body></html>")
+
+    injected_client = _client_with_handler(handler)
+
+    fetch.fetch_url("https://example.com", client=injected_client)
+
+    assert injected_client.is_closed is False
+    injected_client.close()
+
+
+def test_fetch_url_returns_error_when_response_too_large():
+    from app.tools import fetch
+
+    huge_html = f"<html><body>{'A' * (fetch.DEFAULT_MAX_RESPONSE_BYTES + 1)}</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=huge_html)
+
+    result = fetch.fetch_url("https://example.com/huge", client=_client_with_handler(handler))
+
+    assert result.startswith("Error fetching https://example.com/huge: response too large")
