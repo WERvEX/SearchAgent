@@ -25,6 +25,8 @@ def get_report(report_id: int, session: Session = Depends(get_db)):
 def download_markdown(report_id: int, session: Session = Depends(get_db)):
     report = _get_report_or_404(session, report_id)
     path = report_export.export_markdown(report)
+    report.file_path = str(path)
+    session.commit()
     return Response(
         content=path.read_text(encoding="utf-8"),
         media_type="text/markdown; charset=utf-8",
