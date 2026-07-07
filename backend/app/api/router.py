@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api import conversations, health, mcp, research, settings
+from app.api import conversations, health, mcp, reports, research, settings
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -8,3 +8,4 @@ api_router.include_router(conversations.router)
 api_router.include_router(research.router)
 api_router.include_router(settings.router)
 api_router.include_router(mcp.router)
+api_router.include_router(reports.router)
