@@ -2,11 +2,11 @@ from collections.abc import Iterator
 
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal
+from app.db import session as db_session
 
 
 def get_db() -> Iterator[Session]:
-    if SessionLocal is None:
+    if db_session.SessionLocal is None:
         raise RuntimeError("Database has not been initialized")
-    with SessionLocal() as session:
+    with db_session.SessionLocal() as session:
         yield session
