@@ -21,7 +21,7 @@ def export_markdown(report: Report) -> Path:
 
 
 def render_report_html(markdown: str) -> str:
-    body = MarkdownIt("commonmark").enable("table").render(markdown)
+    body = MarkdownIt("commonmark", {"html": False}).enable("table").render(markdown)
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<style>body{font-family:Arial,'Microsoft YaHei',sans-serif;line-height:1.6;"
@@ -37,8 +37,15 @@ async def export_pdf(report: Report) -> Path:
     html = render_report_html(report.content_md)
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        page = await browser.new_page()
-        await page.set_content(html, wait_until="networkidle")
-        await page.pdf(path=str(path), format="A4", print_background=True)
-        await browser.close()
+        try:
+            context = await browser.new_context(java_script_enabled=False)
+            try:
+                page = await context.new_page()
+                await page.route("**/*", lambda route: route.abort())
+                await page.set_content(html, wait_until="networkidle")
+                await page.pdf(path=str(path), format="A4", print_background=True)
+            finally:
+                await context.close()
+        finally:
+            await browser.close()
     return path

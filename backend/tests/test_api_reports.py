@@ -1,6 +1,17 @@
 from fastapi.testclient import TestClient
 
 
+def test_render_report_html_escapes_raw_html():
+    from app.services.report_export import render_report_html
+
+    html = render_report_html("# Title\n\n<script>alert('x')</script>\n\n<img src='https://x.test/a.png'>")
+
+    assert "<script>" not in html
+    assert "<img" not in html
+    assert "&lt;script&gt;" in html
+    assert "&lt;img" in html
+
+
 def test_report_read_and_markdown_download(app_home):
     from app.db import session as db
     from app.db.models import Conversation, Report, ResearchProject
