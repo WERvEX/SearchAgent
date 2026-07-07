@@ -1,8 +1,10 @@
 import type {
   ConversationDetail,
   ConversationRead,
-  LLMProfile,
+  LLMProfileCreate,
+  LLMProfileRead,
   MCPServer,
+  PreferenceRead,
   ReportRead,
   ResearchRunResponse,
 } from "./types";
@@ -38,14 +40,13 @@ export const api = {
     request<ResearchRunResponse>("/research/start", json("POST", payload)),
   resumeResearch: (threadId: string, payload: { profile_id?: number; decision: Record<string, unknown> }) =>
     request<ResearchRunResponse>(`/research/${encodeURIComponent(threadId)}/resume`, json("POST", payload)),
-  listLLMProfiles: () => request<LLMProfile[]>("/settings/llm-profiles"),
-  createLLMProfile: (payload: Omit<LLMProfile, "id">) =>
-    request<LLMProfile>("/settings/llm-profiles", json("POST", payload)),
+  listLLMProfiles: () => request<LLMProfileRead[]>("/settings/llm-profiles"),
+  createLLMProfile: (payload: LLMProfileCreate) =>
+    request<LLMProfileRead>("/settings/llm-profiles", json("POST", payload)),
   testLLMProfile: (id: number) =>
     request<{ ok: boolean; error: string | null }>(`/settings/llm-profiles/${id}/test`, { method: "POST" }),
-  setPreference: (key: string, value: unknown) =>
-    request<{ key: string; value: unknown }>(`/settings/preferences/${key}`, json("PUT", { value })),
-  getPreference: (key: string) => request<{ key: string; value: unknown }>(`/settings/preferences/${key}`),
+  setPreference: (key: string, value: unknown) => request<PreferenceRead>(`/settings/preferences/${key}`, json("PUT", { value })),
+  getPreference: (key: string) => request<PreferenceRead>(`/settings/preferences/${key}`),
   listMCPServers: () => request<MCPServer[]>("/mcp/servers"),
   createMCPServer: (payload: Omit<MCPServer, "id">) => request<MCPServer>("/mcp/servers", json("POST", payload)),
   getReport: (id: number) => request<ReportRead>(`/reports/${id}`),

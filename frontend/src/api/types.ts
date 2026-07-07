@@ -29,16 +29,34 @@ export type ResearchRunResponse = {
   interrupt_payload: Record<string, unknown> | null;
 };
 
-export type LLMProfile = {
+export type LLMProfileCreate = {
+  name: string;
+  provider: string;
+  base_url?: string | null;
+  model: string;
+  api_key?: string | null;
+  params?: Record<string, unknown> | null;
+  is_default?: boolean;
+};
+
+export type LLMProfileRead = {
   id: number;
   name: string;
   provider: string;
   base_url: string | null;
   model: string;
-  api_key?: string | null;
-  api_key_masked?: string | null;
+  api_key: string;
   params: Record<string, unknown> | null;
   is_default: boolean;
+};
+
+export type PreferenceValue = {
+  value: unknown;
+};
+
+export type PreferenceRead = {
+  key: string;
+  value: PreferenceValue;
 };
 
 export type MCPServer = {

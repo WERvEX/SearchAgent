@@ -88,3 +88,30 @@ Then ran:
 ## Concerns
 
 - `useEventStream` sets status to `"closed"` during effect cleanup. This matches the task brief, but React will drop that final state update on unmount, so consumers mainly observe `"closed"` on re-subscription transitions rather than after a component is fully gone.
+
+## Fix Report
+
+Addressed the Task 2 review findings by aligning the frontend API types and client signatures with the backend settings contract.
+
+### Files Changed
+
+- `frontend/src/api/types.ts`
+- `frontend/src/api/client.ts`
+- `frontend/src/api/client.test.ts`
+- `.superpowers/sdd/task-2-report.md`
+
+### Focused Fix Verification
+
+Commands run from `frontend/`:
+
+```powershell
+npm.cmd test -- src/api/client.test.ts
+npm.cmd test -- src/hooks/useEventStream.test.tsx
+npm.cmd run build
+```
+
+Results:
+
+- `npm.cmd test -- src/api/client.test.ts` -> PASS (4 tests)
+- `npm.cmd test -- src/hooks/useEventStream.test.tsx` -> PASS (1 test)
+- `npm.cmd run build` -> PASS
