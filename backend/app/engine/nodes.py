@@ -1,11 +1,16 @@
 import json
 import re
+import asyncio
+import inspect
+import threading
 from typing import Any
 
 from langgraph.types import interrupt
 
+from app.db.models import Source
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
+from app.services.settings_service import get_preference
 
 
 def _get_llm(ctx: EngineContext) -> Any:
@@ -60,6 +65,197 @@ def _fallback_steps() -> list[dict]:
         {"seq": 1, "title": "检索资料", "status": "pending"},
         {"seq": 2, "title": "整理证据", "status": "pending"},
     ]
+
+
+def _run_async(value: Any) -> Any:
+    if not inspect.isawaitable(value):
+        return value
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(value)
+
+    result: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(value)
+        except BaseException as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def _get_max_sources(ctx: EngineContext) -> int:
+    pref = get_preference(ctx.session, "max_sources") or {}
+    value = pref.get("value", 20)
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 20
+
+
+def _tool_name(tool: Any) -> str:
+    return str(getattr(tool, "name", tool.__class__.__name__))
+
+
+def _tool_call_name(call: Any) -> str:
+    if isinstance(call, dict):
+        return str(call.get("name") or call.get("function", {}).get("name") or "")
+    return str(getattr(call, "name", ""))
+
+
+def _tool_call_args(call: Any) -> dict:
+    if isinstance(call, dict):
+        args = call.get("args")
+        if args is None:
+            args = call.get("function", {}).get("arguments")
+    else:
+        args = getattr(call, "args", None)
+
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return args if isinstance(args, dict) else {}
+
+
+def _response_tool_calls(response: Any) -> list[Any]:
+    calls = getattr(response, "tool_calls", None)
+    if calls:
+        return list(calls)
+    additional = getattr(response, "additional_kwargs", {}) or {}
+    return list(additional.get("tool_calls") or [])
+
+
+def _invoke_tool(tool: Any, args: dict) -> Any:
+    if hasattr(tool, "invoke"):
+        return _run_async(tool.invoke(args))
+    if callable(tool):
+        return tool(**args)
+    raise TypeError(f"Tool {_tool_name(tool)} is not invokable")
+
+
+def _iter_source_items(result: Any, *, tool_name: str, args: dict) -> list[dict]:
+    if isinstance(result, dict):
+        if isinstance(result.get("results"), list):
+            candidates = result["results"]
+        elif result.get("url"):
+            candidates = [result]
+        else:
+            candidates = []
+    elif isinstance(result, list):
+        candidates = result
+    else:
+        candidates = []
+
+    sources = []
+    for item in candidates:
+        if not isinstance(item, dict) or not item.get("url"):
+            continue
+        sources.append(
+            {
+                "title": str(item.get("title") or item.get("url")),
+                "url": str(item["url"]),
+                "snippet": item.get("snippet") or item.get("content"),
+                "tool_name": tool_name,
+            }
+        )
+
+    if not sources and args.get("url"):
+        sources.append(
+            {
+                "title": str(args.get("title") or args["url"]),
+                "url": str(args["url"]),
+                "snippet": None,
+                "tool_name": tool_name,
+            }
+        )
+    return sources
+
+
+def _dedupe_findings(findings: list[dict]) -> list[dict]:
+    seen = set()
+    deduped = []
+    for finding in findings:
+        url = finding.get("url")
+        key = url or json.dumps(finding, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    return deduped
+
+
+def _mark_acceptance_criteria(steps: list[dict], findings: list[dict]) -> list[dict]:
+    updated_steps = []
+    for step in steps:
+        updated = dict(step)
+        criteria = []
+        for criterion in step.get("acceptance_criteria", []) or []:
+            description = (
+                str(criterion.get("description", ""))
+                if isinstance(criterion, dict)
+                else str(criterion)
+            )
+            evidence_ref = None
+            description_lower = description.lower()
+            for finding in findings:
+                haystack = " ".join(
+                    str(finding.get(key, ""))
+                    for key in ("title", "snippet", "url")
+                ).lower()
+                if description_lower and description_lower in haystack:
+                    evidence_ref = finding.get("url")
+                    break
+            criteria.append(
+                {
+                    "description": description,
+                    "met": evidence_ref is not None,
+                    "evidence_ref": evidence_ref,
+                }
+            )
+        if criteria:
+            updated["acceptance_criteria"] = criteria
+        updated_steps.append(updated)
+    return updated_steps
+
+
+def _build_report_markdown(state: ResearchState) -> str:
+    findings = state.get("findings", [])
+    lines = [
+        "# 研究报告",
+        "",
+        f"## 研究目标",
+        "",
+        state.get("objective", ""),
+        "",
+        "## 主要发现",
+        "",
+    ]
+
+    if not findings:
+        lines.append("暂无可引用发现。")
+    for idx, finding in enumerate(findings, start=1):
+        title = finding.get("title") or finding.get("url") or f"来源 {idx}"
+        snippet = finding.get("snippet") or ""
+        lines.append(f"- {title}[^{idx}] {snippet}")
+
+    if findings:
+        lines.extend(["", "## 参考来源", ""])
+        for idx, finding in enumerate(findings, start=1):
+            title = finding.get("title") or finding.get("url") or f"来源 {idx}"
+            url = finding.get("url", "")
+            lines.append(f"[^{idx}]: {title} - {url}")
+
+    return "\n".join(lines).strip() + "\n"
 
 
 def make_nodes(ctx: EngineContext):
@@ -132,13 +328,64 @@ def make_nodes(ctx: EngineContext):
         return {"steps": _fallback_steps()}
 
     def execute_research(state: ResearchState) -> dict:
-        return {"findings": [{"title": "stub finding", "url": "https://example.com"}]}
+        from app.tools import registry
+
+        max_sources = _get_max_sources(ctx)
+        tool_result = _run_async(registry.get_research_tools(ctx.session))
+        tools = tool_result.get("tools", [])
+        tools_by_name = {_tool_name(tool): tool for tool in tools}
+
+        llm = _get_llm(ctx)
+        bound_llm = llm.bind_tools(tools) if hasattr(llm, "bind_tools") else llm
+        prompt = (
+            "Use the available tools to collect sources for this research task. "
+            f"Objective: {state.get('objective', '')}\n"
+            f"Steps: {json.dumps(state.get('steps', []), ensure_ascii=False)}\n"
+            f"Return at most {max_sources} useful sources."
+        )
+        response = bound_llm.invoke(prompt)
+
+        findings = list(state.get("findings", []))
+        for call in _response_tool_calls(response):
+            if len(findings) >= max_sources:
+                break
+
+            name = _tool_call_name(call)
+            tool = tools_by_name.get(name)
+            if tool is None:
+                continue
+
+            args = _tool_call_args(call)
+            result = _invoke_tool(tool, args)
+            for source in _iter_source_items(result, tool_name=name, args=args):
+                if len(findings) >= max_sources:
+                    break
+                findings.append(source)
+                ctx.session.add(
+                    Source(
+                        project_id=state["project_id"],
+                        url=source["url"],
+                        title=source["title"],
+                        snippet=source.get("snippet"),
+                        tool_name=name,
+                    )
+                )
+
+        ctx.session.commit()
+        return {"findings": findings}
 
     def aggregate_evidence(state: ResearchState) -> dict:
-        return {}
+        findings = _dedupe_findings(state.get("findings", []))
+        steps = _mark_acceptance_criteria(state.get("steps", []), findings)
+        return {"findings": findings, "steps": steps}
 
     def write_report(state: ResearchState) -> dict:
-        return {"report_md": "# 研究报告\n\n（stub）"}
+        from app.engine.persistence import persist_report, sync_plan_and_steps
+
+        report_md = _build_report_markdown(state)
+        sync_plan_and_steps(ctx.session, state)
+        persist_report(ctx.session, project_id=state["project_id"], content_md=report_md)
+        return {"report_md": report_md}
 
     return {
         "clarify_intent": clarify_intent,

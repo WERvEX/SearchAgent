@@ -2,6 +2,28 @@ import pytest
 from langgraph.types import Command
 
 
+class _FakeGraphLLM:
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, prompt):
+        class _R:
+            tool_calls = []
+
+        r = _R()
+        text = str(prompt).lower()
+        if "plan" in text:
+            r.content = (
+                '{"summary": "计划摘要", "options": [{"id": "A", "label": "全面"}, '
+                '{"id": "B", "label": "聚焦"}]}'
+            )
+        elif "steps" in text:
+            r.content = '[{"seq": 1, "title": "搜索", "description": "d", "status": "pending"}]'
+        else:
+            r.content = "OBJECTIVE: renewable energy trends"
+        return r
+
+
 @pytest.fixture()
 def session(app_home):
     import app.db.session as db
@@ -16,7 +38,7 @@ def test_compile_graph_has_interrupt_after_plan(session):
     from app.engine.graph import compile_research_graph
     from app.engine.context import EngineContext
 
-    ctx = EngineContext(session=session, profile_id=1)
+    ctx = EngineContext(session=session, profile_id=1, llm_factory=lambda: _FakeGraphLLM())
     graph = compile_research_graph(ctx)
 
     assert graph is not None
@@ -24,18 +46,30 @@ def test_compile_graph_has_interrupt_after_plan(session):
 
 
 def test_graph_pauses_at_plan_interrupt(session):
+    from app.db.models import Conversation, ResearchProject
     from app.engine.graph import compile_research_graph
     from app.engine.context import EngineContext
     from app.engine import checkpointer
 
-    ctx = EngineContext(session=session, profile_id=1)
+    conv = Conversation(title="c")
+    session.add(conv)
+    session.flush()
+    project = ResearchProject(
+        conversation_id=conv.id,
+        topic="renewable energy",
+        objective="Study renewable energy trends",
+    )
+    session.add(project)
+    session.commit()
+
+    ctx = EngineContext(session=session, profile_id=1, llm_factory=lambda: _FakeGraphLLM())
     cp = checkpointer.create_checkpointer()
     graph = compile_research_graph(ctx, checkpointer=cp)
 
     config = {"configurable": {"thread_id": "test-thread-1"}}
     initial = {
-        "conversation_id": 1,
-        "project_id": 1,
+        "conversation_id": conv.id,
+        "project_id": project.id,
         "messages": [],
         "objective": "Study renewable energy trends",
         "plan": None,
