@@ -7,44 +7,64 @@ type EventStreamOptions = {
   conversationId: number | null;
   replayLimit?: number;
   displayLimit?: number;
+  promoteDiscoveredThread?: boolean;
+  onEvent?: (event: ResearchLifecycleEvent) => void;
 };
 
-export function useEventStream({ threadId, conversationId, replayLimit = 100, displayLimit = 50 }: EventStreamOptions) {
+export function useEventStream({
+  threadId,
+  conversationId,
+  replayLimit = 100,
+  displayLimit = 50,
+  promoteDiscoveredThread = false,
+  onEvent,
+}: EventStreamOptions) {
   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
   const [events, setEvents] = useState<ResearchLifecycleEvent[]>([]);
+  const [promotedThreadId, setPromotedThreadId] = useState<string | null>(null);
+  const effectiveThreadId = threadId ?? promotedThreadId;
 
   useEffect(() => {
-    if (!threadId && conversationId === null) {
+    setPromotedThreadId(null);
+  }, [conversationId, threadId]);
+
+  useEffect(() => {
+    if (!effectiveThreadId && conversationId === null) {
       setEvents([]);
       setStatus("closed");
       return;
     }
 
-    setEvents((current) => (threadId ? current.filter((event) => event.data.thread_id === threadId) : []));
+    setEvents((current) => (effectiveThreadId ? current.filter((event) => event.data.thread_id === effectiveThreadId) : []));
 
     setStatus("connecting");
     const unsubscribe = subscribeToEvents({
-      threadId,
+      threadId: effectiveThreadId,
       conversationId,
       replayLimit,
       onOpen: () => setStatus("open"),
       onError: () => setStatus("error"),
-      onEvent: (event) =>
+      onEvent: (event) => {
+        if (!effectiveThreadId && promoteDiscoveredThread && event.data.conversation_id === conversationId) {
+          setPromotedThreadId((current) => current ?? event.data.thread_id);
+        }
+        onEvent?.(event);
         setEvents((current) => {
-          if (threadId ? event.data.thread_id !== threadId : event.data.conversation_id !== conversationId) {
+          if (effectiveThreadId ? event.data.thread_id !== effectiveThreadId : event.data.conversation_id !== conversationId) {
             return current;
           }
           if (current.some((existing) => existing.id === event.id)) {
             return current;
           }
           return [event, ...current].slice(0, displayLimit);
-        }),
+        });
+      },
     });
     return () => {
       unsubscribe();
       setStatus("closed");
     };
-  }, [conversationId, displayLimit, replayLimit, threadId]);
+  }, [conversationId, displayLimit, effectiveThreadId, onEvent, promoteDiscoveredThread, replayLimit]);
 
   return { status, events };
 }

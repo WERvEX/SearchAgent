@@ -1,9 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useEventStream } from "./useEventStream";
 
 class MockEventSource {
   static instance: MockEventSource | null = null;
+  static instances: MockEventSource[] = [];
 
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -12,6 +13,7 @@ class MockEventSource {
 
   constructor(public readonly url: string) {
     MockEventSource.instance = this;
+    MockEventSource.instances.push(this);
   }
 
   close() {
@@ -24,6 +26,11 @@ class MockEventSource {
 }
 
 describe("useEventStream", () => {
+  beforeEach(() => {
+    MockEventSource.instance = null;
+    MockEventSource.instances = [];
+  });
+
   it("uses the active conversation before a research thread is available", async () => {
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
 
@@ -43,6 +50,32 @@ describe("useEventStream", () => {
 
     await waitFor(() => expect(result.current.events).toHaveLength(1));
     expect(result.current.events[0]).toEqual(expect.objectContaining({ id: "evt-1" }));
+  });
+
+  it("promotes the subscription to the discovered thread while start is pending", async () => {
+    vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
+
+    renderHook(() =>
+      useEventStream({
+        threadId: null,
+        conversationId: 4,
+        replayLimit: 100,
+        promoteDiscoveredThread: true,
+      }),
+    );
+
+    const conversationSource = MockEventSource.instance;
+    expect(conversationSource?.url).toBe("/events?conversation_id=4&replay_limit=100");
+
+    act(() => {
+      conversationSource?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 2 }),
+        lastEventId: "evt-1",
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100"));
+    expect(conversationSource?.closed).toBe(true);
   });
 
   it("keeps distinct active-run lifecycle events within the local display count", async () => {

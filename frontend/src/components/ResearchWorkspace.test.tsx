@@ -23,6 +23,7 @@ describe("ResearchWorkspace", () => {
         }}
         profileId={7}
         currentRun={{ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null }}
+        startState="idle"
         onStart={onStart}
       />,
     );
@@ -51,6 +52,43 @@ describe("ResearchWorkspace", () => {
         }}
         profileId={null}
         currentRun={null}
+        startState="idle"
+        onStart={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+  });
+
+  it("disables research start while a run is pending or active", () => {
+    const conversation = {
+      id: 4,
+      title: "Search API evaluation",
+      status: "idle",
+      created_at: "",
+      updated_at: "",
+      messages: [],
+      projects: [],
+    };
+
+    const { rerender } = render(
+      <ResearchWorkspace
+        conversation={conversation}
+        profileId={7}
+        currentRun={null}
+        startState="pending"
+        onStart={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+
+    rerender(
+      <ResearchWorkspace
+        conversation={conversation}
+        profileId={7}
+        currentRun={{ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null }}
+        startState="active"
         onStart={vi.fn()}
       />,
     );

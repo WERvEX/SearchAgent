@@ -40,26 +40,32 @@ const profile = {
 
 class MockEventSource {
   static instance: MockEventSource | null = null;
+  static instances: MockEventSource[] = [];
 
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   readonly listeners = new Map<string, (message: MessageEvent<string>) => void>();
+  closed = false;
 
   constructor(public readonly url: string) {
     MockEventSource.instance = this;
+    MockEventSource.instances.push(this);
   }
 
   addEventListener(type: string, listener: (message: MessageEvent<string>) => void) {
     this.listeners.set(type, listener);
   }
 
-  close() {}
+  close() {
+    this.closed = true;
+  }
 }
 
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     MockEventSource.instance = null;
+    MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
     vi.mocked(api.listConversations).mockResolvedValue([conversation]);
     vi.mocked(api.listLLMProfiles).mockResolvedValue([profile]);
@@ -207,18 +213,47 @@ describe("App", () => {
     await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
     await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
     await user.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    const conversationSource = MockEventSource.instance;
 
     act(() => {
-      MockEventSource.instance?.listeners.get("research.started")?.({
+      conversationSource?.listeners.get("research.started")?.({
         data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9 }),
         lastEventId: "1",
       } as MessageEvent<string>);
     });
 
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100"));
+    expect(conversationSource?.closed).toBe(true);
     expect(await screen.findByText("research.started")).toBeInTheDocument();
 
     await act(async () => {
       resolveStart!({ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null });
     });
+  });
+
+  it("prevents duplicate research starts while a non-interrupted run remains active", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: {},
+      interrupted: false,
+      interrupt_payload: null,
+    });
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    const request = screen.getByLabelText("Research request");
+    await user.type(request, "First request");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await waitFor(() => expect(api.startResearch).toHaveBeenCalledTimes(1));
+    await user.type(request, "Second request");
+
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(api.startResearch).toHaveBeenCalledTimes(1);
   });
 });

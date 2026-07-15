@@ -1,6 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
-import type { ConversationDetail, ConversationRead, LLMProfileRead, ReportRead, ResearchRunResponse } from "./api/types";
+import type {
+  ConversationDetail,
+  ConversationRead,
+  LLMProfileRead,
+  ReportRead,
+  ResearchLifecycleEvent,
+  ResearchRunResponse,
+} from "./api/types";
 import { AppPanel, AppShell } from "./components/AppShell";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { PlanPanel, type ResearchPlan } from "./components/PlanPanel";
@@ -9,11 +16,7 @@ import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { useEventStream } from "./hooks/useEventStream";
 
-function EventProgressStream({ threadId, conversationId }: { threadId: string | null; conversationId: number | null }) {
-  const eventStream = useEventStream({ threadId, conversationId, replayLimit: 100, displayLimit: 80 });
-
-  return <ProgressStream status={eventStream.status} events={eventStream.events} />;
-}
+type ResearchStartState = "idle" | "pending" | "active";
 
 export default function App() {
   const [activePanel, setActivePanel] = useState<AppPanel>("research");
@@ -26,8 +29,29 @@ export default function App() {
   const [report, setReport] = useState<ReportRead | null>(null);
   const [statusMessage, setStatusMessage] = useState("Loading workspace...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [startState, setStartState] = useState<ResearchStartState>("idle");
 
   const reportId = typeof currentRun?.state.report_id === "number" ? currentRun.state.report_id : null;
+
+  const handleLifecycleEvent = useCallback((event: ResearchLifecycleEvent) => {
+    if (event.event === "research.started" || event.event === "research.resumed") {
+      setStartState((current) => (current === "pending" ? "active" : current));
+      return;
+    }
+
+    if (event.event === "research.completed" || event.event === "research.failed") {
+      setStartState("idle");
+    }
+  }, []);
+
+  const eventStream = useEventStream({
+    threadId: currentRun?.thread_id ?? null,
+    conversationId: activeConversation?.id ?? null,
+    replayLimit: 100,
+    displayLimit: 80,
+    promoteDiscoveredThread: startState === "pending" && currentRun === null,
+    onEvent: handleLifecycleEvent,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +94,7 @@ export default function App() {
     if (activeConversationId === null) {
       setActiveConversation(null);
       setCurrentRun(null);
+      setStartState("idle");
       return;
     }
 
@@ -85,6 +110,7 @@ export default function App() {
         }
         setActiveConversation(detail);
         setCurrentRun(null);
+        setStartState("idle");
         setStatusMessage("Ready for research.");
       } catch (error) {
         if (!cancelled) {
@@ -176,18 +202,20 @@ export default function App() {
   }
 
   async function handleStartResearch(message: string) {
-    if (!activeConversation || !selectedProfileId || currentRun?.interrupted) {
+    if (!activeConversation || !selectedProfileId || currentRun?.interrupted || startState !== "idle") {
       return;
     }
 
     try {
       setErrorMessage(null);
+      setStartState("pending");
       const run = await api.startResearch({
         conversation_id: activeConversation.id,
         profile_id: selectedProfileId,
         user_message: message,
       });
       setCurrentRun(run);
+      setStartState(run.interrupted ? "idle" : "active");
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
       setConversations((current) =>
@@ -195,6 +223,7 @@ export default function App() {
       );
       setStatusMessage(run.interrupted ? "Plan decision required." : "Research started.");
     } catch (error) {
+      setStartState("idle");
       setErrorMessage(error instanceof Error ? error.message : "Failed to start research.");
     }
   }
@@ -211,6 +240,7 @@ export default function App() {
         decision,
       });
       setCurrentRun(run);
+      setStartState(run.interrupted ? "idle" : "active");
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
       setConversations((current) =>
@@ -270,6 +300,7 @@ export default function App() {
                   conversation={activeConversation}
                   profileId={selectedProfileId}
                   currentRun={currentRun}
+                  startState={startState}
                   onStart={handleStartResearch}
                 />
               </div>
@@ -299,10 +330,7 @@ export default function App() {
             {typeof EventSource === "undefined" ? (
               <ProgressStream status="unavailable" events={[]} />
             ) : (
-              <EventProgressStream
-                threadId={currentRun?.thread_id ?? null}
-                conversationId={activeConversation?.id ?? null}
-              />
+              <ProgressStream status={eventStream.status} events={eventStream.events} />
             )}
           </div>
         )

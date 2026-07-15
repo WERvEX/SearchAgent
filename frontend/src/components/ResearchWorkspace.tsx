@@ -6,13 +6,21 @@ type ResearchWorkspaceProps = {
   conversation: ConversationDetail | null;
   profileId: number | null;
   currentRun: ResearchRunResponse | null;
+  startState: "idle" | "pending" | "active";
   onStart: (message: string) => void;
 };
 
-export function ResearchWorkspace({ conversation, profileId, currentRun, onStart }: ResearchWorkspaceProps) {
+export function ResearchWorkspace({ conversation, profileId, currentRun, startState, onStart }: ResearchWorkspaceProps) {
   const [message, setMessage] = useState("");
   const trimmed = message.trim();
-  const disabled = !conversation || !profileId || trimmed.length === 0;
+  const disabled = !conversation || !profileId || trimmed.length === 0 || startState !== "idle" || currentRun?.interrupted === true;
+  const statusLabel = currentRun?.interrupted
+    ? "Plan decision required"
+    : startState === "pending"
+      ? "Starting research"
+      : startState === "active"
+        ? "Research in progress"
+        : "Ready for research";
 
   return (
     <section className="flex h-full flex-col">
@@ -20,9 +28,7 @@ export function ResearchWorkspace({ conversation, profileId, currentRun, onStart
         <h1 className="text-base font-semibold text-zinc-950">
           {conversation?.title ?? "Select or create a conversation"}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          {currentRun?.interrupted ? "Plan decision required" : "Ready for research"}
-        </p>
+        <p className="mt-1 text-sm text-zinc-500">{statusLabel}</p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
