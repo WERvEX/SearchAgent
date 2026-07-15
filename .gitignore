@@ -7,3 +7,5 @@ frontend/tsconfig.tsbuildinfo
 backend/.test-tmp*/
 backend/.tmp-pytest*/
 backend/.runtime-check-*/
+.pytest_tmp/
+frontend/.runtime-check-*/
