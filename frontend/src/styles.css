@@ -23,4 +23,28 @@
   .nav-button-active {
     @apply inline-flex h-9 items-center gap-2 rounded-md bg-zinc-900 px-3 text-sm text-white;
   }
+
+  .app-shell {
+    @apply flex flex-col;
+  }
+
+  .app-shell-pane {
+    @apply overflow-hidden rounded-lg border border-zinc-200 shadow-sm;
+    min-height: clamp(18rem, 32vh, 24rem);
+  }
+
+  .app-shell-main {
+    min-height: clamp(26rem, 54vh, 40rem);
+  }
+
+  @screen xl {
+    .app-shell-pane {
+      @apply rounded-none border-0 shadow-none;
+      min-height: 0;
+    }
+
+    .app-shell-main {
+      min-height: 0;
+    }
+  }
 }
