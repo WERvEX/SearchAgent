@@ -24,6 +24,7 @@ export function ConversationPanel({ conversations, activeId, onSelect, onCreate 
               <button
                 key={conversation.id}
                 type="button"
+                aria-current={conversation.id === activeId ? "page" : undefined}
                 className={
                   conversation.id === activeId
                     ? "w-full rounded-md bg-zinc-900 p-3 text-left text-sm text-white"

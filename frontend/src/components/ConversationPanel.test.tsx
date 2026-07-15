@@ -21,6 +21,8 @@ describe("ConversationPanel", () => {
     );
 
     expect(screen.getByRole("button", { name: /beta running/i })).toHaveClass("bg-zinc-900");
+    expect(screen.getByRole("button", { name: /alpha idle/i })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /beta running/i })).toHaveAttribute("aria-current", "page");
 
     await userEvent.click(screen.getByRole("button", { name: /alpha idle/i }));
     await userEvent.click(screen.getByRole("button", { name: /^new$/i }));

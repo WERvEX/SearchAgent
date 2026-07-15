@@ -26,6 +26,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
           <button
             type="button"
             className={activePanel === "research" ? "nav-button-active" : "nav-button"}
+            aria-pressed={activePanel === "research"}
             onClick={() => onPanelChange("research")}
           >
             <History className="h-4 w-4" aria-hidden="true" />
@@ -34,6 +35,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
           <button
             type="button"
             className={activePanel === "settings" ? "nav-button-active" : "nav-button"}
+            aria-pressed={activePanel === "settings"}
             onClick={() => onPanelChange("settings")}
           >
             <Settings className="h-4 w-4" aria-hidden="true" />
@@ -47,13 +49,13 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
       >
         <aside
           data-testid="app-shell-history"
-          className="app-shell-pane order-2 min-w-0 bg-white xl:order-1 xl:border-r xl:border-zinc-200"
+          className="app-shell-pane min-w-0 bg-white xl:border-r xl:border-zinc-200"
         >
           {left}
         </aside>
         <main
           data-testid="app-shell-main"
-          className="app-shell-pane app-shell-main order-1 min-w-0 bg-zinc-50 xl:order-2"
+          className="app-shell-pane app-shell-main min-w-0 bg-zinc-50"
         >
           {main}
         </main>
