@@ -1,3 +1,20 @@
+import asyncio
+import time
+
+import pytest
+
+
+def _read_sse_chunk(response):
+    async def read():
+        iterator = response.body_iterator
+        try:
+            return await anext(iterator)
+        finally:
+            await iterator.aclose()
+
+    return asyncio.run(read())
+
+
 def test_event_bus_broadcasts_to_each_subscriber(app_home):
     import queue
     import threading
@@ -71,3 +88,54 @@ def test_event_bus_filters_replay_and_live_events_by_thread_id(app_home):
     live = bus.publish({"type": "research.completed", "data": {"thread_id": "thread-1"}})
     assert next(subscriber) == live
     assert ignored["id"] < matching["id"] < live["id"]
+
+
+def test_stream_events_filters_replay_by_thread_and_conversation_id(app_home, monkeypatch):
+    from fastapi import Request
+
+    from app.api import events as events_api
+    from app.core.events import EventBus
+
+    bus = EventBus(history_size=10)
+    bus.publish({"type": "research.started", "data": {"thread_id": "other", "conversation_id": 9}})
+    bus.publish({"type": "research.started", "data": {"thread_id": "thread-1", "conversation_id": 9}})
+    bus.publish({"type": "research.started", "data": {"thread_id": "other", "conversation_id": 4}})
+    matching = bus.publish({"type": "research.plan_ready", "data": {"thread_id": "thread-1", "conversation_id": 4}})
+    monkeypatch.setattr(events_api, "get_event_bus", lambda: bus)
+
+    request = Request({"type": "http", "method": "GET", "path": "/events", "headers": [(b"last-event-id", b"1")]})
+    response = events_api.stream_events(request, thread_id="thread-1", conversation_id=4)
+
+    assert _read_sse_chunk(response) == (
+        f'id: {matching["id"]}\nevent: research.plan_ready\ndata: {{"thread_id":"thread-1","conversation_id":4}}\n\n'
+    )
+    assert not bus._subscribers
+
+
+def test_stream_events_releases_idle_subscription_after_disconnect(app_home, monkeypatch):
+    from app.api import events as events_api
+    from app.core.events import EventBus
+
+    bus = EventBus()
+    monkeypatch.setattr(events_api, "get_event_bus", lambda: bus)
+
+    class DisconnectAfterSubscription:
+        headers = {}
+
+        async def is_disconnected(self):
+            return bool(bus._subscribers)
+
+    async def consume_until_disconnect():
+        response = events_api.stream_events(DisconnectAfterSubscription(), conversation_id=4)
+        iterator = response.body_iterator
+        try:
+            with pytest.raises(StopAsyncIteration):
+                await anext(iterator)
+        finally:
+            await iterator.aclose()
+
+    started_at = time.monotonic()
+    asyncio.run(consume_until_disconnect())
+
+    assert time.monotonic() - started_at < 1
+    assert not bus._subscribers

@@ -5,3 +5,4 @@ frontend/dist/
 frontend/.npm-cache/
 frontend/tsconfig.tsbuildinfo
 backend/.test-tmp*/
+backend/.tmp-pytest*/

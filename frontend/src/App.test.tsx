@@ -191,4 +191,34 @@ describe("App", () => {
     expect(await screen.findByText("research.plan_ready")).toBeInTheDocument();
     expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
   });
+
+  it("renders active-conversation lifecycle progress before starting research resolves", async () => {
+    const user = userEvent.setup();
+    let resolveStart: (run: { thread_id: string; state: {}; interrupted: boolean; interrupt_payload: null }) => void;
+    vi.mocked(api.startResearch).mockImplementation(
+      () => new Promise((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    act(() => {
+      MockEventSource.instance?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9 }),
+        lastEventId: "1",
+      } as MessageEvent<string>);
+    });
+
+    expect(await screen.findByText("research.started")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStart!({ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null });
+    });
+  });
 });

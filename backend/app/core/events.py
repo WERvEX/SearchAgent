@@ -40,6 +40,8 @@ class EventBus:
         last_event_id: str | None = None,
         replay_limit: int | None = None,
         event_filter: Callable[[dict[str, Any]], bool] | None = None,
+        stop_event: threading.Event | None = None,
+        poll_interval: float = 0.1,
     ) -> Iterator[dict[str, Any]]:
         subscriber: queue.Queue[dict[str, Any]] = queue.Queue()
         with self._lock:
@@ -54,8 +56,11 @@ class EventBus:
             self._subscribers.add(subscriber)
         try:
             yield from history
-            while True:
-                event = subscriber.get()
+            while stop_event is None or not stop_event.is_set():
+                try:
+                    event = subscriber.get(timeout=poll_interval)
+                except queue.Empty:
+                    continue
                 if event_filter is None or event_filter(event):
                     yield event
         finally:

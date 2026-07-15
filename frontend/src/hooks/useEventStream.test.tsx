@@ -24,10 +24,33 @@ class MockEventSource {
 }
 
 describe("useEventStream", () => {
+  it("uses the active conversation before a research thread is available", async () => {
+    vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
+
+    const { result } = renderHook(() => useEventStream({ threadId: null, conversationId: 4 }));
+
+    expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100");
+    act(() => {
+      MockEventSource.instance?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 2 }),
+        lastEventId: "evt-1",
+      } as MessageEvent<string>);
+      MockEventSource.instance?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-2", conversation_id: 5, project_id: 2 }),
+        lastEventId: "evt-2",
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(1));
+    expect(result.current.events[0]).toEqual(expect.objectContaining({ id: "evt-1" }));
+  });
+
   it("keeps distinct active-run lifecycle events within the local display count", async () => {
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
 
-    const { result, unmount } = renderHook(() => useEventStream({ threadId: "thread-1", replayLimit: 100, displayLimit: 2 }));
+    const { result, unmount } = renderHook(() =>
+      useEventStream({ threadId: "thread-1", conversationId: 1, replayLimit: 100, displayLimit: 2 }),
+    );
 
     expect(result.current.status).toBe("connecting");
     expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100");

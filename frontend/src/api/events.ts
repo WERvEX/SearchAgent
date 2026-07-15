@@ -31,13 +31,20 @@ export function parseResearchLifecycleEvent(
 }
 
 export function subscribeToEvents(options: {
-  threadId: string;
+  threadId: string | null;
+  conversationId?: number | null;
   replayLimit: number;
   onOpen?: () => void;
   onEvent: (event: ResearchLifecycleEvent) => void;
   onError?: () => void;
 }): () => void {
-  const query = new URLSearchParams({ thread_id: options.threadId, replay_limit: String(options.replayLimit) });
+  const query = new URLSearchParams();
+  if (options.threadId) {
+    query.set("thread_id", options.threadId);
+  } else if (options.conversationId !== null && options.conversationId !== undefined) {
+    query.set("conversation_id", String(options.conversationId));
+  }
+  query.set("replay_limit", String(options.replayLimit));
   const source = new EventSource(`/events?${query.toString()}`);
   source.onopen = () => options.onOpen?.();
   source.onerror = () => options.onError?.();

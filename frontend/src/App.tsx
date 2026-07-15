@@ -9,8 +9,8 @@ import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { useEventStream } from "./hooks/useEventStream";
 
-function EventProgressStream({ threadId }: { threadId: string | null }) {
-  const eventStream = useEventStream({ threadId, replayLimit: 100, displayLimit: 80 });
+function EventProgressStream({ threadId, conversationId }: { threadId: string | null; conversationId: number | null }) {
+  const eventStream = useEventStream({ threadId, conversationId, replayLimit: 100, displayLimit: 80 });
 
   return <ProgressStream status={eventStream.status} events={eventStream.events} />;
 }
@@ -299,7 +299,10 @@ export default function App() {
             {typeof EventSource === "undefined" ? (
               <ProgressStream status="unavailable" events={[]} />
             ) : (
-              <EventProgressStream threadId={currentRun?.thread_id ?? null} />
+              <EventProgressStream
+                threadId={currentRun?.thread_id ?? null}
+                conversationId={activeConversation?.id ?? null}
+              />
             )}
           </div>
         )

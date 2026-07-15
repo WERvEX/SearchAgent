@@ -49,4 +49,12 @@ describe("research event transport", () => {
 
     expect(onEvent).toHaveBeenCalledWith({ id: "42", event: "research.plan_ready", data: planReadyPayload });
   });
+
+  it("uses the active conversation filter until the research thread is known", () => {
+    vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
+
+    subscribeToEvents({ threadId: null, conversationId: 4, replayLimit: 25, onEvent: vi.fn() });
+
+    expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=25");
+  });
 });
