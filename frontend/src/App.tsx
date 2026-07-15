@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { api } from "./api/client";
 import type {
   ConversationDetail,
@@ -93,9 +93,18 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState("Loading workspace...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [runPhase, setRunPhase] = useState<ResearchRunPhase>("idle");
+  const runPhaseRef = useRef<ResearchRunPhase>("idle");
   const resumePendingRef = useRef(false);
 
   const reportId = typeof currentRun?.state.report_id === "number" ? currentRun.state.report_id : retainedReportId;
+
+  const updateRunPhase = useCallback((nextPhase: SetStateAction<ResearchRunPhase>) => {
+    setRunPhase((current) => {
+      const resolvedPhase = typeof nextPhase === "function" ? nextPhase(current) : nextPhase;
+      runPhaseRef.current = resolvedPhase;
+      return resolvedPhase;
+    });
+  }, []);
 
   const handleLifecycleEvent = useCallback((event: ResearchLifecycleEvent) => {
     setCurrentRun((current) => mergeLifecycleEventIntoRun(current, event));
@@ -105,31 +114,31 @@ export default function App() {
     }
 
     if (event.event === "research.started" || event.event === "research.resumed") {
-      setRunPhase("active");
+      updateRunPhase("active");
       setStatusMessage(statusMessageForPhase("active"));
       return;
     }
 
     if (event.event === "research.awaiting_approval") {
-      setRunPhase("awaiting_approval");
+      updateRunPhase("awaiting_approval");
       setStatusMessage(statusMessageForPhase("awaiting_approval"));
       return;
     }
 
     if (event.event === "research.completed") {
-      setRunPhase("completed");
+      updateRunPhase("completed");
       setStatusMessage(statusMessageForPhase("completed"));
       return;
     }
 
     if (event.event === "research.failed") {
-      setRunPhase("failed");
+      updateRunPhase("failed");
       setStatusMessage(statusMessageForPhase("failed"));
       if (typeof event.data.message === "string") {
         setErrorMessage(event.data.message);
       }
     }
-  }, []);
+  }, [updateRunPhase]);
 
   const eventStream = useEventStream({
     threadId: currentRun?.thread_id ?? null,
@@ -182,7 +191,7 @@ export default function App() {
       setActiveConversation(null);
       setCurrentRun(null);
       setRetainedReportId(null);
-      setRunPhase("idle");
+      updateRunPhase("idle");
       return;
     }
 
@@ -199,7 +208,7 @@ export default function App() {
         setActiveConversation(detail);
         setCurrentRun(null);
         setRetainedReportId(null);
-        setRunPhase("idle");
+        updateRunPhase("idle");
         setStatusMessage(statusMessageForPhase("idle"));
       } catch (error) {
         if (!cancelled) {
@@ -213,7 +222,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeConversationId]);
+  }, [activeConversationId, updateRunPhase]);
 
   useEffect(() => {
     if (reportId === null) {
@@ -302,12 +311,12 @@ export default function App() {
       return;
     }
 
-    try {
-      setErrorMessage(null);
-      setCurrentRun(null);
-      setRunPhase("starting");
-      setStatusMessage(statusMessageForPhase("starting"));
-      const run = await api.startResearch({
+      try {
+        setErrorMessage(null);
+        setCurrentRun(null);
+        updateRunPhase("starting");
+        setStatusMessage(statusMessageForPhase("starting"));
+        const run = await api.startResearch({
         conversation_id: activeConversation.id,
         profile_id: selectedProfileId,
         user_message: message,
@@ -315,23 +324,26 @@ export default function App() {
       setCurrentRun(run);
       if (typeof run.state.report_id === "number") {
         setRetainedReportId(run.state.report_id);
-      }
-      let nextPhase = deriveRunPhaseFromResponse(run);
-      setRunPhase((current) => {
-        nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
-        return nextPhase;
-      });
+        }
+        let nextPhase = deriveRunPhaseFromResponse(run);
+        updateRunPhase((current) => {
+          nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
+          return nextPhase;
+        });
       setStatusMessage(statusMessageForPhase(nextPhase));
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
-      setConversations((current) =>
-        current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
-      );
-    } catch (error) {
-      setRunPhase((current) => (current === "starting" ? "idle" : current));
-      setStatusMessage(statusMessageForPhase("idle"));
-      setErrorMessage(error instanceof Error ? error.message : "Failed to start research.");
-    }
+        setConversations((current) =>
+          current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
+        );
+      } catch (error) {
+        if (runPhaseRef.current === "completed" || runPhaseRef.current === "failed") {
+          return;
+        }
+        updateRunPhase((current) => (current === "starting" ? "idle" : current));
+        setStatusMessage(statusMessageForPhase("idle"));
+        setErrorMessage(error instanceof Error ? error.message : "Failed to start research.");
+      }
   }
 
   async function handleResumeResearch(decision: { approved: true; chosen_option: string } | { approved: false; feedback: string }) {
@@ -345,35 +357,38 @@ export default function App() {
       return;
     }
 
-    try {
-      resumePendingRef.current = true;
-      setErrorMessage(null);
-      setRunPhase("resuming");
-      setStatusMessage(statusMessageForPhase("resuming"));
-      const run = await api.resumeResearch(currentRun.thread_id, {
+      try {
+        resumePendingRef.current = true;
+        setErrorMessage(null);
+        updateRunPhase("resuming");
+        setStatusMessage(statusMessageForPhase("resuming"));
+        const run = await api.resumeResearch(currentRun.thread_id, {
         profile_id: selectedProfileId,
         decision,
       });
       setCurrentRun(run);
       if (typeof run.state.report_id === "number") {
         setRetainedReportId(run.state.report_id);
-      }
-      let nextPhase = deriveRunPhaseFromResponse(run);
-      setRunPhase((current) => {
-        nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
-        return nextPhase;
-      });
+        }
+        let nextPhase = deriveRunPhaseFromResponse(run);
+        updateRunPhase((current) => {
+          nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
+          return nextPhase;
+        });
       setStatusMessage(statusMessageForPhase(nextPhase));
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
-      setConversations((current) =>
-        current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
-      );
-    } catch (error) {
-      setRunPhase((current) => (current === "resuming" ? "awaiting_approval" : current));
-      setStatusMessage(statusMessageForPhase("awaiting_approval"));
-      setErrorMessage(error instanceof Error ? error.message : "Failed to resume research.");
-    } finally {
+        setConversations((current) =>
+          current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
+        );
+      } catch (error) {
+        if (runPhaseRef.current === "completed" || runPhaseRef.current === "failed") {
+          return;
+        }
+        updateRunPhase((current) => (current === "resuming" ? "awaiting_approval" : current));
+        setStatusMessage(statusMessageForPhase("awaiting_approval"));
+        setErrorMessage(error instanceof Error ? error.message : "Failed to resume research.");
+      } finally {
       resumePendingRef.current = false;
     }
   }

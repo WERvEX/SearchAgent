@@ -290,6 +290,69 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
   });
 
+  it("keeps the completed terminal status when startResearch rejects after SSE completion", async () => {
+    const user = userEvent.setup();
+    let rejectStart: (error: Error) => void;
+    vi.mocked(api.getReport).mockResolvedValue(completedReport);
+    vi.mocked(api.startResearch).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectStart = reject;
+        }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    const conversationSource = MockEventSource.instance;
+
+    act(() => {
+      conversationSource?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9 }),
+        lastEventId: "evt-start-1",
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100"));
+    const threadSource = MockEventSource.instance;
+
+    act(() => {
+      threadSource?.listeners.get("research.completed")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9, report_id: 12 }),
+        lastEventId: "evt-start-2",
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() => expect(api.getReport).toHaveBeenCalledWith(12));
+    expect(await screen.findByRole("heading", { name: "Completed report" })).toBeInTheDocument();
+    expect(screen.queryByText("Late start failure")).not.toBeInTheDocument();
+
+    await act(async () => {
+      rejectStart!(new Error("Late start failure"));
+    });
+
+    expect(screen.getByRole("heading", { name: "Completed report" })).toBeInTheDocument();
+    expect(screen.queryByText("Late start failure")).not.toBeInTheDocument();
+  });
+
+  it("returns to idle with an error when startResearch fails before any terminal SSE event", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockRejectedValue(new Error("Start request failed"));
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(await screen.findByText("Ready for research.")).toBeInTheDocument();
+    expect(screen.getByText("Start request failed")).toBeInTheDocument();
+  });
+
   it("returns to conversation-scoped subscription before restarting after completion and promotes on research.started", async () => {
     const user = userEvent.setup();
     let resolveRestart: (run: { thread_id: string; state: {}; interrupted: false; interrupt_payload: null }) => void;
@@ -399,6 +462,91 @@ describe("App", () => {
 
     await waitFor(() => expect(api.getReport).toHaveBeenCalledWith(12));
     expect(await screen.findByRole("heading", { name: "Completed report" })).toBeInTheDocument();
+  });
+
+  it("keeps the failed terminal status when resumeResearch rejects after SSE failure", async () => {
+    const user = userEvent.setup();
+    let rejectResume: (error: Error) => void;
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: {},
+      interrupted: true,
+      interrupt_payload: {
+        plan: {
+          summary: "Choose a scope.",
+          options: [{ id: "A", label: "Broad scope" }],
+        },
+      },
+    });
+    vi.mocked(api.resumeResearch).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectResume = reject;
+        }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await screen.findByText("Choose a scope.");
+    await user.click(screen.getByRole("button", { name: /approve plan/i }));
+
+    expect(await screen.findByText("Resuming research.")).toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instance?.listeners.get("research.failed")?.({
+        data: JSON.stringify({
+          thread_id: "thread-1",
+          conversation_id: 4,
+          project_id: 9,
+          message: "Backend reported failure",
+        }),
+        lastEventId: "evt-resume-1",
+      } as MessageEvent<string>);
+    });
+
+    expect(await screen.findByText("Research failed.")).toBeInTheDocument();
+    expect(screen.getAllByText("Backend reported failure")).toHaveLength(2);
+
+    await act(async () => {
+      rejectResume!(new Error("Late resume failure"));
+    });
+
+    expect(screen.getByText("Research failed.")).toBeInTheDocument();
+    expect(screen.getAllByText("Backend reported failure")).toHaveLength(2);
+    expect(screen.queryByText("Late resume failure")).not.toBeInTheDocument();
+  });
+
+  it("returns to awaiting approval with an error when resumeResearch fails before any terminal SSE event", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: {},
+      interrupted: true,
+      interrupt_payload: {
+        plan: {
+          summary: "Choose a scope.",
+          options: [{ id: "A", label: "Broad scope" }],
+        },
+      },
+    });
+    vi.mocked(api.resumeResearch).mockRejectedValue(new Error("Resume request failed"));
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await screen.findByText("Choose a scope.");
+    await user.click(screen.getByRole("button", { name: /approve plan/i }));
+
+    expect(await screen.findByText("Plan decision required.")).toBeInTheDocument();
+    expect(screen.getByText("Resume request failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /approve plan/i })).toBeEnabled();
   });
 
   it("prevents duplicate research starts while a started run is still in progress", async () => {
