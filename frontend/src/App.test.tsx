@@ -12,6 +12,9 @@ vi.mock("./api/client", () => ({
     startResearch: vi.fn(),
     resumeResearch: vi.fn(),
     listLLMProfiles: vi.fn(),
+    getReport: vi.fn(),
+    markdownDownloadUrl: vi.fn((id: number) => `/api/reports/${id}/download.md`),
+    pdfDownloadUrl: vi.fn((id: number) => `/api/reports/${id}/download.pdf`),
   },
 }));
 
@@ -107,5 +110,33 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(api.startResearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the numeric report_id from a completed run", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: { report_id: 12 },
+      interrupted: false,
+      interrupt_payload: null,
+    });
+    vi.mocked(api.getReport).mockResolvedValue({
+      id: 12,
+      project_id: 2,
+      version: 1,
+      format: "md",
+      content_md: "# Completed report",
+      file_path: null,
+      created_at: "2026-07-15T10:30:00Z",
+    });
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Complete the report");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await waitFor(() => expect(api.getReport).toHaveBeenCalledWith(12));
+    expect(await screen.findByRole("heading", { name: "Completed report" })).toBeInTheDocument();
   });
 });

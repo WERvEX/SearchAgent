@@ -10,15 +10,39 @@ describe("ProgressStream", () => {
     expect(screen.getByText("No events yet")).toBeInTheDocument();
   });
 
-  it("renders event names and structured event data", () => {
+  it("renders concise typed progress details", () => {
     render(
       <ProgressStream
         status="open"
-        events={[{ id: "event-1", event: "research.completed", data: { report_id: 7 } }]}
+        events={[
+          {
+            id: "event-1",
+            event: "research.progress",
+            data: {
+              schema_version: 1,
+              kind: "research.progress",
+              occurred_at: "2026-07-15T10:30:00Z",
+              thread_id: "thread-1",
+              conversation_id: 4,
+              project_id: 7,
+              phase: "writing",
+              message: "Drafting report",
+              data: { section: "summary" },
+            },
+          },
+        ]}
       />,
     );
 
-    expect(screen.getByText("research.completed")).toBeInTheDocument();
-    expect(screen.getByText(/"report_id": 7/)).toBeInTheDocument();
+    expect(screen.getByText("writing")).toBeInTheDocument();
+    expect(screen.getByText("Drafting report")).toBeInTheDocument();
+    expect(screen.queryByText(/schema_version/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to a readable representation for unknown events", () => {
+    render(<ProgressStream status="open" events={[{ id: "event-1", event: "other.event", data: { note: "Unknown" } }]} />);
+
+    expect(screen.getByText("other.event")).toBeInTheDocument();
+    expect(screen.getByText(/"note": "Unknown"/)).toBeInTheDocument();
   });
 });

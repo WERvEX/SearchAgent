@@ -50,6 +50,6 @@ export const api = {
   listMCPServers: () => request<MCPServer[]>("/mcp/servers"),
   createMCPServer: (payload: Omit<MCPServer, "id">) => request<MCPServer>("/mcp/servers", json("POST", payload)),
   getReport: (id: number) => request<ReportRead>(`/reports/${id}`),
-  exportPdf: (id: number) => request<{ format: string; file_path: string }>(`/reports/${id}/export.pdf`, { method: "POST" }),
   markdownDownloadUrl: (id: number) => `/api/reports/${id}/download.md`,
+  pdfDownloadUrl: (id: number) => `/api/reports/${id}/download.pdf`,
 };

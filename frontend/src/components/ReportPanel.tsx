@@ -5,13 +5,13 @@ import type { ReportRead } from "../api/types";
 export function ReportPanel({
   report,
   markdownUrl,
+  pdfUrl,
   onLoadReport,
-  onExportPdf,
 }: {
   report: ReportRead | null;
   markdownUrl: string | null;
+  pdfUrl: string | null;
   onLoadReport: () => void;
-  onExportPdf: (reportId: number) => void;
 }) {
   return (
     <section className="border-t border-zinc-200 bg-white">
@@ -28,15 +28,12 @@ export function ReportPanel({
               Markdown
             </a>
           ) : null}
-          <button
-            type="button"
-            className="nav-button-active"
-            disabled={!report}
-            onClick={() => report && onExportPdf(report.id)}
-          >
-            <FileDown className="h-4 w-4" aria-hidden="true" />
-            Export PDF
-          </button>
+          {pdfUrl ? (
+            <a className="nav-button-active" href={pdfUrl}>
+              <FileDown className="h-4 w-4" aria-hidden="true" />
+              PDF
+            </a>
+          ) : null}
         </div>
       </div>
       <article className="prose prose-zinc max-w-none p-5 text-sm">

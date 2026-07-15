@@ -55,6 +55,12 @@ describe("api client", () => {
     expect(result.value.value).toBe(12);
   });
 
+  it("builds direct report download endpoints without requesting a fake PDF export", () => {
+    expect(api.markdownDownloadUrl(7)).toBe("/api/reports/7/download.md");
+    expect(api.pdfDownloadUrl(7)).toBe("/api/reports/7/download.pdf");
+    expect("exportPdf" in api).toBe(false);
+  });
+
   it("uses the backend create payload and masked read shape for llm profiles", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

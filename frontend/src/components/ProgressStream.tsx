@@ -1,5 +1,9 @@
 import { Activity } from "lucide-react";
-import type { ServerEvent } from "../api/types";
+import type { ResearchProgressEvent, ServerEvent } from "../api/types";
+
+function isResearchProgressEvent(event: ServerEvent): event is ResearchProgressEvent {
+  return event.event === "research.progress" && typeof event.data === "object" && event.data !== null && "message" in event.data;
+}
 
 export function ProgressStream({ status, events }: { status: string; events: ServerEvent[] }) {
   return (
@@ -16,9 +20,13 @@ export function ProgressStream({ status, events }: { status: string; events: Ser
             <div key={`${event.id ?? "event"}-${index}`} className="mb-2 rounded-md border border-zinc-200 p-3 text-sm">
               <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase text-zinc-500">
                 <Activity className="h-3.5 w-3.5" aria-hidden="true" />
-                {event.event ?? "message"}
+                {isResearchProgressEvent(event) ? event.data.phase : event.event ?? "message"}
               </div>
-              <pre className="whitespace-pre-wrap break-words text-xs text-zinc-700">{JSON.stringify(event.data, null, 2)}</pre>
+              {isResearchProgressEvent(event) ? (
+                <p className="break-words text-sm text-zinc-700">{event.data.message}</p>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words text-xs text-zinc-700">{JSON.stringify(event.data, null, 2)}</pre>
+              )}
             </div>
           ))
         )}

@@ -24,7 +24,7 @@ export type ConversationDetail = ConversationRead & {
 
 export type ResearchRunResponse = {
   thread_id: string;
-  state: Record<string, unknown>;
+  state: Record<string, unknown> & { report_id?: number };
   interrupted: boolean;
   interrupt_payload: Record<string, unknown> | null;
 };
@@ -80,8 +80,28 @@ export type ReportRead = {
   created_at: string;
 };
 
-export type ServerEvent = {
-  id?: string;
-  event?: string;
+export type ResearchProgressPayload = {
+  schema_version: number;
+  kind: "research.progress";
+  occurred_at: string;
+  thread_id: string;
+  conversation_id: number;
+  project_id: number;
+  phase: string;
+  message: string;
   data: Record<string, unknown>;
 };
+
+export type ResearchProgressEvent = {
+  id: string;
+  event: "research.progress";
+  data: ResearchProgressPayload;
+};
+
+export type UnknownServerEvent = {
+  id?: string;
+  event?: string;
+  data: unknown;
+};
+
+export type ServerEvent = ResearchProgressEvent | UnknownServerEvent;

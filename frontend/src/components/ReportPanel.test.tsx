@@ -4,9 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ReportPanel } from "./ReportPanel";
 
 describe("ReportPanel", () => {
-  it("renders markdown and triggers PDF export", async () => {
-    const onExportPdf = vi.fn();
-
+  it("renders markdown and browser download links", () => {
     render(
       <ReportPanel
         report={{
@@ -19,16 +17,15 @@ describe("ReportPanel", () => {
           created_at: "2026-07-07T00:00:00",
         }}
         markdownUrl="/api/reports/7/download.md"
+        pdfUrl="/api/reports/7/download.pdf"
         onLoadReport={vi.fn()}
-        onExportPdf={onExportPdf}
       />,
     );
 
     expect(screen.getByRole("heading", { name: "Findings" })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /export pdf/i }));
-
-    expect(onExportPdf).toHaveBeenCalledWith(7);
+    expect(screen.getByRole("link", { name: /markdown/i })).toHaveAttribute("href", "/api/reports/7/download.md");
+    expect(screen.getByRole("link", { name: /pdf/i })).toHaveAttribute("href", "/api/reports/7/download.pdf");
   });
 
   it("loads the selected report and links its markdown download", async () => {
@@ -39,8 +36,8 @@ describe("ReportPanel", () => {
       <ReportPanel
         report={null}
         markdownUrl="/api/reports/7/download.md"
+        pdfUrl="/api/reports/7/download.pdf"
         onLoadReport={onLoadReport}
-        onExportPdf={vi.fn()}
       />,
     );
 
@@ -48,6 +45,6 @@ describe("ReportPanel", () => {
 
     expect(onLoadReport).toHaveBeenCalledOnce();
     expect(screen.getByRole("link", { name: /markdown/i })).toHaveAttribute("href", "/api/reports/7/download.md");
-    expect(screen.getByRole("button", { name: /export pdf/i })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /pdf/i })).toHaveAttribute("href", "/api/reports/7/download.pdf");
   });
 });

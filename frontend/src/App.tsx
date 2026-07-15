@@ -9,8 +9,8 @@ import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { useEventStream } from "./hooks/useEventStream";
 
-function EventProgressStream() {
-  const eventStream = useEventStream(80);
+function EventProgressStream({ threadId }: { threadId: string | null }) {
+  const eventStream = useEventStream({ threadId, replayLimit: 100, displayLimit: 80 });
 
   return <ProgressStream status={eventStream.status} events={eventStream.events} />;
 }
@@ -236,16 +236,6 @@ export default function App() {
     }
   }
 
-  async function handleExportPdf(reportIdToExport: number) {
-    try {
-      setErrorMessage(null);
-      await api.exportPdf(reportIdToExport);
-      setStatusMessage("PDF export completed.");
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to export PDF.");
-    }
-  }
-
   return (
     <AppShell
       activePanel={activePanel}
@@ -287,8 +277,8 @@ export default function App() {
                 <ReportPanel
                   report={report}
                   markdownUrl={api.markdownDownloadUrl(reportId)}
+                  pdfUrl={api.pdfDownloadUrl(reportId)}
                   onLoadReport={handleLoadReport}
-                  onExportPdf={handleExportPdf}
                 />
               ) : null}
             </div>
@@ -309,7 +299,7 @@ export default function App() {
             {typeof EventSource === "undefined" ? (
               <ProgressStream status="unavailable" events={[]} />
             ) : (
-              <EventProgressStream />
+              <EventProgressStream threadId={currentRun?.thread_id ?? null} />
             )}
           </div>
         )
