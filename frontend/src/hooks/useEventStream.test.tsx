@@ -134,4 +134,14 @@ describe("useEventStream", () => {
     unmount();
     expect(MockEventSource.instance?.closed).toBe(true);
   });
+
+  it("returns an unavailable status without constructing EventSource when the API is absent", () => {
+    vi.stubGlobal("EventSource", undefined);
+
+    const { result } = renderHook(() => useEventStream({ threadId: null, conversationId: 4 }));
+
+    expect(result.current.status).toBe("unavailable");
+    expect(result.current.events).toEqual([]);
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
 });

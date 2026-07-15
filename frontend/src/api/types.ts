@@ -29,6 +29,17 @@ export type ResearchRunResponse = {
   interrupt_payload: Record<string, unknown> | null;
 };
 
+export type ResearchRunPhase =
+  | "idle"
+  | "starting"
+  | "active"
+  | "awaiting_approval"
+  | "resuming"
+  | "completed"
+  | "failed";
+
+export type EventStreamStatus = "connecting" | "open" | "closed" | "error" | "unavailable";
+
 export type LLMProfileCreate = {
   name: string;
   provider: string;

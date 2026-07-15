@@ -1,26 +1,33 @@
 import { useState } from "react";
 import { Send } from "lucide-react";
-import type { ConversationDetail, ResearchRunResponse } from "../api/types";
+import type { ConversationDetail, ResearchRunPhase } from "../api/types";
 
 type ResearchWorkspaceProps = {
   conversation: ConversationDetail | null;
   profileId: number | null;
-  currentRun: ResearchRunResponse | null;
-  startState: "idle" | "pending" | "active";
+  runPhase: ResearchRunPhase;
   onStart: (message: string) => void;
 };
 
-export function ResearchWorkspace({ conversation, profileId, currentRun, startState, onStart }: ResearchWorkspaceProps) {
+export function ResearchWorkspace({ conversation, profileId, runPhase, onStart }: ResearchWorkspaceProps) {
   const [message, setMessage] = useState("");
   const trimmed = message.trim();
-  const disabled = !conversation || !profileId || trimmed.length === 0 || startState !== "idle" || currentRun?.interrupted === true;
-  const statusLabel = currentRun?.interrupted
-    ? "Plan decision required"
-    : startState === "pending"
-      ? "Starting research"
-      : startState === "active"
-        ? "Research in progress"
-        : "Ready for research";
+  const canStart = runPhase === "idle" || runPhase === "completed" || runPhase === "failed";
+  const disabled = !conversation || !profileId || trimmed.length === 0 || !canStart;
+  const statusLabel =
+    runPhase === "awaiting_approval"
+      ? "Plan decision required"
+      : runPhase === "starting"
+        ? "Starting research"
+        : runPhase === "resuming"
+          ? "Resuming research"
+          : runPhase === "active"
+            ? "Research in progress"
+            : runPhase === "completed"
+              ? "Research completed"
+              : runPhase === "failed"
+                ? "Research failed"
+                : "Ready for research";
 
   return (
     <section className="flex h-full flex-col">

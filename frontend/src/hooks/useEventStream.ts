@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { subscribeToEvents } from "../api/events";
-import type { ResearchLifecycleEvent } from "../api/types";
+import type { EventStreamStatus, ResearchLifecycleEvent } from "../api/types";
 
 type EventStreamOptions = {
   threadId: string | null;
@@ -19,7 +19,9 @@ export function useEventStream({
   promoteDiscoveredThread = false,
   onEvent,
 }: EventStreamOptions) {
-  const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
+  const [status, setStatus] = useState<EventStreamStatus>(
+    typeof EventSource === "undefined" ? "unavailable" : "connecting",
+  );
   const [events, setEvents] = useState<ResearchLifecycleEvent[]>([]);
   const [promotedThreadId, setPromotedThreadId] = useState<string | null>(null);
   const effectiveThreadId = threadId ?? promotedThreadId;
@@ -29,6 +31,12 @@ export function useEventStream({
   }, [conversationId, threadId]);
 
   useEffect(() => {
+    if (typeof EventSource === "undefined") {
+      setEvents([]);
+      setStatus("unavailable");
+      return;
+    }
+
     if (!effectiveThreadId && conversationId === null) {
       setEvents([]);
       setStatus("closed");

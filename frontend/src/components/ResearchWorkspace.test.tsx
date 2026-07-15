@@ -22,8 +22,7 @@ describe("ResearchWorkspace", () => {
           projects: [],
         }}
         profileId={7}
-        currentRun={{ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null }}
-        startState="idle"
+        runPhase="idle"
         onStart={onStart}
       />,
     );
@@ -51,8 +50,7 @@ describe("ResearchWorkspace", () => {
           projects: [],
         }}
         profileId={null}
-        currentRun={null}
-        startState="idle"
+        runPhase="idle"
         onStart={vi.fn()}
       />,
     );
@@ -75,8 +73,7 @@ describe("ResearchWorkspace", () => {
       <ResearchWorkspace
         conversation={conversation}
         profileId={7}
-        currentRun={null}
-        startState="pending"
+        runPhase="starting"
         onStart={vi.fn()}
       />,
     );
@@ -87,12 +84,33 @@ describe("ResearchWorkspace", () => {
       <ResearchWorkspace
         conversation={conversation}
         profileId={7}
-        currentRun={{ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null }}
-        startState="active"
+        runPhase="active"
         onStart={vi.fn()}
       />,
     );
 
+    expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+  });
+
+  it("re-enables research start after a completed run", () => {
+    render(
+      <ResearchWorkspace
+        conversation={{
+          id: 4,
+          title: "Search API evaluation",
+          status: "idle",
+          created_at: "",
+          updated_at: "",
+          messages: [],
+          projects: [],
+        }}
+        profileId={7}
+        runPhase="completed"
+        onStart={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Research completed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
   });
 });

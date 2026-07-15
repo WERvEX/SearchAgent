@@ -9,7 +9,8 @@ describe("PlanPanel", () => {
 
     render(
       <PlanPanel
-        interrupted
+        awaitingDecision
+        pending={false}
         plan={{
           summary: "Compare search APIs",
           options: [
@@ -33,7 +34,8 @@ describe("PlanPanel", () => {
 
     render(
       <PlanPanel
-        interrupted
+        awaitingDecision
+        pending={false}
         plan={{ summary: "Compare search APIs", options: [{ id: "A", title: "Pricing focus" }] }}
         onApprove={vi.fn()}
         onReplan={onReplan}
@@ -44,5 +46,23 @@ describe("PlanPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /replan/i }));
 
     expect(onReplan).toHaveBeenCalledWith({ approved: false, feedback: "Need broader coverage" });
+  });
+
+  it("disables decision controls while a resume request is pending", () => {
+    render(
+      <PlanPanel
+        awaitingDecision
+        pending
+        plan={{ summary: "Compare search APIs", options: [{ id: "A", title: "Pricing focus" }] }}
+        onApprove={vi.fn()}
+        onReplan={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Submitting decision")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pricing focus")).toBeDisabled();
+    expect(screen.getByLabelText("Replan feedback")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /approve plan/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /replan/i })).toBeDisabled();
   });
 });

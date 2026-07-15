@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/client";
 import type {
   ConversationDetail,
@@ -6,6 +6,7 @@ import type {
   LLMProfileRead,
   ReportRead,
   ResearchLifecycleEvent,
+  ResearchRunPhase,
   ResearchRunResponse,
 } from "./api/types";
 import { AppPanel, AppShell } from "./components/AppShell";
@@ -16,7 +17,68 @@ import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { useEventStream } from "./hooks/useEventStream";
 
-type ResearchStartState = "idle" | "pending" | "active";
+function createPlaceholderRun(threadId: string): ResearchRunResponse {
+  return {
+    thread_id: threadId,
+    state: {},
+    interrupted: false,
+    interrupt_payload: null,
+  };
+}
+
+function deriveRunPhaseFromResponse(run: ResearchRunResponse): ResearchRunPhase {
+  return run.interrupted ? "awaiting_approval" : "completed";
+}
+
+function isStableRunPhase(phase: ResearchRunPhase) {
+  return phase === "awaiting_approval" || phase === "completed" || phase === "failed";
+}
+
+function statusMessageForPhase(phase: ResearchRunPhase) {
+  switch (phase) {
+    case "starting":
+      return "Starting research.";
+    case "active":
+      return "Research in progress.";
+    case "awaiting_approval":
+      return "Plan decision required.";
+    case "resuming":
+      return "Resuming research.";
+    case "completed":
+      return "Research completed.";
+    case "failed":
+      return "Research failed.";
+    case "idle":
+    default:
+      return "Ready for research.";
+  }
+}
+
+function mergeLifecycleEventIntoRun(
+  currentRun: ResearchRunResponse | null,
+  event: ResearchLifecycleEvent,
+): ResearchRunResponse {
+  const base =
+    currentRun?.thread_id === event.data.thread_id ? currentRun : createPlaceholderRun(event.data.thread_id);
+  const reportId = typeof event.data.report_id === "number" ? event.data.report_id : null;
+  const nextState = reportId === null ? base.state : { ...base.state, report_id: reportId };
+
+  if (event.event === "research.awaiting_approval") {
+    return {
+      ...base,
+      state: nextState,
+      interrupted: true,
+    };
+  }
+
+  return {
+    ...base,
+    state: nextState,
+    interrupted: false,
+    interrupt_payload:
+      event.event === "research.started" || event.event === "research.resumed" ? base.interrupt_payload : null,
+  };
+}
 
 export default function App() {
   const [activePanel, setActivePanel] = useState<AppPanel>("research");
@@ -26,21 +88,46 @@ export default function App() {
   const [profiles, setProfiles] = useState<LLMProfileRead[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
   const [currentRun, setCurrentRun] = useState<ResearchRunResponse | null>(null);
+  const [retainedReportId, setRetainedReportId] = useState<number | null>(null);
   const [report, setReport] = useState<ReportRead | null>(null);
   const [statusMessage, setStatusMessage] = useState("Loading workspace...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [startState, setStartState] = useState<ResearchStartState>("idle");
+  const [runPhase, setRunPhase] = useState<ResearchRunPhase>("idle");
+  const resumePendingRef = useRef(false);
 
-  const reportId = typeof currentRun?.state.report_id === "number" ? currentRun.state.report_id : null;
+  const reportId = typeof currentRun?.state.report_id === "number" ? currentRun.state.report_id : retainedReportId;
 
   const handleLifecycleEvent = useCallback((event: ResearchLifecycleEvent) => {
+    setCurrentRun((current) => mergeLifecycleEventIntoRun(current, event));
+
+    if (typeof event.data.report_id === "number") {
+      setRetainedReportId(event.data.report_id);
+    }
+
     if (event.event === "research.started" || event.event === "research.resumed") {
-      setStartState((current) => (current === "pending" ? "active" : current));
+      setRunPhase("active");
+      setStatusMessage(statusMessageForPhase("active"));
       return;
     }
 
-    if (event.event === "research.completed" || event.event === "research.failed") {
-      setStartState("idle");
+    if (event.event === "research.awaiting_approval") {
+      setRunPhase("awaiting_approval");
+      setStatusMessage(statusMessageForPhase("awaiting_approval"));
+      return;
+    }
+
+    if (event.event === "research.completed") {
+      setRunPhase("completed");
+      setStatusMessage(statusMessageForPhase("completed"));
+      return;
+    }
+
+    if (event.event === "research.failed") {
+      setRunPhase("failed");
+      setStatusMessage(statusMessageForPhase("failed"));
+      if (typeof event.data.message === "string") {
+        setErrorMessage(event.data.message);
+      }
     }
   }, []);
 
@@ -49,7 +136,7 @@ export default function App() {
     conversationId: activeConversation?.id ?? null,
     replayLimit: 100,
     displayLimit: 80,
-    promoteDiscoveredThread: startState === "pending" && currentRun === null,
+    promoteDiscoveredThread: runPhase === "starting" && currentRun === null,
     onEvent: handleLifecycleEvent,
   });
 
@@ -94,7 +181,8 @@ export default function App() {
     if (activeConversationId === null) {
       setActiveConversation(null);
       setCurrentRun(null);
-      setStartState("idle");
+      setRetainedReportId(null);
+      setRunPhase("idle");
       return;
     }
 
@@ -110,8 +198,9 @@ export default function App() {
         }
         setActiveConversation(detail);
         setCurrentRun(null);
-        setStartState("idle");
-        setStatusMessage("Ready for research.");
+        setRetainedReportId(null);
+        setRunPhase("idle");
+        setStatusMessage(statusMessageForPhase("idle"));
       } catch (error) {
         if (!cancelled) {
           setErrorMessage(error instanceof Error ? error.message : "Failed to load conversation.");
@@ -202,53 +291,90 @@ export default function App() {
   }
 
   async function handleStartResearch(message: string) {
-    if (!activeConversation || !selectedProfileId || currentRun?.interrupted || startState !== "idle") {
+    if (
+      !activeConversation ||
+      !selectedProfileId ||
+      runPhase === "starting" ||
+      runPhase === "active" ||
+      runPhase === "awaiting_approval" ||
+      runPhase === "resuming"
+    ) {
       return;
     }
 
     try {
       setErrorMessage(null);
-      setStartState("pending");
+      setCurrentRun(null);
+      setRunPhase("starting");
+      setStatusMessage(statusMessageForPhase("starting"));
       const run = await api.startResearch({
         conversation_id: activeConversation.id,
         profile_id: selectedProfileId,
         user_message: message,
       });
       setCurrentRun(run);
-      setStartState(run.interrupted ? "idle" : "active");
+      if (typeof run.state.report_id === "number") {
+        setRetainedReportId(run.state.report_id);
+      }
+      let nextPhase = deriveRunPhaseFromResponse(run);
+      setRunPhase((current) => {
+        nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
+        return nextPhase;
+      });
+      setStatusMessage(statusMessageForPhase(nextPhase));
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
       setConversations((current) =>
         current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
       );
-      setStatusMessage(run.interrupted ? "Plan decision required." : "Research started.");
     } catch (error) {
-      setStartState("idle");
+      setRunPhase((current) => (current === "starting" ? "idle" : current));
+      setStatusMessage(statusMessageForPhase("idle"));
       setErrorMessage(error instanceof Error ? error.message : "Failed to start research.");
     }
   }
 
   async function handleResumeResearch(decision: { approved: true; chosen_option: string } | { approved: false; feedback: string }) {
-    if (!currentRun || !selectedProfileId || !activeConversation) {
+    if (
+      !currentRun ||
+      !selectedProfileId ||
+      !activeConversation ||
+      runPhase !== "awaiting_approval" ||
+      resumePendingRef.current
+    ) {
       return;
     }
 
     try {
+      resumePendingRef.current = true;
       setErrorMessage(null);
+      setRunPhase("resuming");
+      setStatusMessage(statusMessageForPhase("resuming"));
       const run = await api.resumeResearch(currentRun.thread_id, {
         profile_id: selectedProfileId,
         decision,
       });
       setCurrentRun(run);
-      setStartState(run.interrupted ? "idle" : "active");
+      if (typeof run.state.report_id === "number") {
+        setRetainedReportId(run.state.report_id);
+      }
+      let nextPhase = deriveRunPhaseFromResponse(run);
+      setRunPhase((current) => {
+        nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
+        return nextPhase;
+      });
+      setStatusMessage(statusMessageForPhase(nextPhase));
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
       setConversations((current) =>
         current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
       );
-      setStatusMessage(run.interrupted ? "Plan decision required." : "Research resumed.");
     } catch (error) {
+      setRunPhase((current) => (current === "resuming" ? "awaiting_approval" : current));
+      setStatusMessage(statusMessageForPhase("awaiting_approval"));
       setErrorMessage(error instanceof Error ? error.message : "Failed to resume research.");
+    } finally {
+      resumePendingRef.current = false;
     }
   }
 
@@ -299,8 +425,7 @@ export default function App() {
                 <ResearchWorkspace
                   conversation={activeConversation}
                   profileId={selectedProfileId}
-                  currentRun={currentRun}
-                  startState={startState}
+                  runPhase={runPhase}
                   onStart={handleStartResearch}
                 />
               </div>
@@ -322,16 +447,13 @@ export default function App() {
         ) : (
           <div className="grid h-full grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
             <PlanPanel
-              interrupted={currentRun?.interrupted ?? false}
+              awaitingDecision={runPhase === "awaiting_approval"}
+              pending={runPhase === "resuming"}
               plan={plan}
               onApprove={handleResumeResearch}
               onReplan={handleResumeResearch}
             />
-            {typeof EventSource === "undefined" ? (
-              <ProgressStream status="unavailable" events={[]} />
-            ) : (
-              <ProgressStream status={eventStream.status} events={eventStream.events} />
-            )}
+            <ProgressStream status={eventStream.status} events={eventStream.events} />
           </div>
         )
       }
