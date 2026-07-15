@@ -12,6 +12,12 @@ vi.mock("./api/client", () => ({
     startResearch: vi.fn(),
     resumeResearch: vi.fn(),
     listLLMProfiles: vi.fn(),
+    createLLMProfile: vi.fn(),
+    testLLMProfile: vi.fn(),
+    getPreference: vi.fn(),
+    setPreference: vi.fn(),
+    listMCPServers: vi.fn(),
+    createMCPServer: vi.fn(),
     getReport: vi.fn(),
     markdownDownloadUrl: vi.fn((id: number) => `/api/reports/${id}/download.md`),
     pdfDownloadUrl: vi.fn((id: number) => `/api/reports/${id}/download.pdf`),
@@ -79,6 +85,21 @@ describe("App", () => {
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
     vi.mocked(api.listConversations).mockResolvedValue([conversation]);
     vi.mocked(api.listLLMProfiles).mockResolvedValue([profile]);
+    vi.mocked(api.getPreference).mockResolvedValue({ key: "max_sources", value: { value: 8 } });
+    vi.mocked(api.listMCPServers).mockResolvedValue([]);
+    vi.mocked(api.createLLMProfile).mockResolvedValue(profile);
+    vi.mocked(api.testLLMProfile).mockResolvedValue({ ok: true, error: null });
+    vi.mocked(api.setPreference).mockResolvedValue({ key: "max_sources", value: { value: 12 } });
+    vi.mocked(api.createMCPServer).mockResolvedValue({
+      id: 3,
+      name: "bocha",
+      transport: "stdio",
+      command: "npx",
+      args: ["-y", "@humansean/mcp-bocha"],
+      env: { BOCHA_API_KEY: "secr****" },
+      url: null,
+      enabled: true,
+    });
     vi.mocked(api.getConversation).mockResolvedValue(conversationDetail);
   });
 
@@ -691,5 +712,138 @@ describe("App", () => {
     await screen.findByText("Search API evaluation");
     expect(screen.getByText("unavailable")).toBeInTheDocument();
     expect(screen.getByText("No events yet")).toBeInTheDocument();
+  });
+
+  it("loads settings data on mount and falls back to 8 when max_sources is missing", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getPreference).mockRejectedValue(
+      Object.assign(new Error("Preference not found"), { status: 404 }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(await screen.findByLabelText("Max sources")).toHaveValue(8);
+    expect(api.listMCPServers).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Preference not found")).not.toBeInTheDocument();
+  });
+
+  it("creates a profile, refreshes the list, and selects the refreshed backend default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listLLMProfiles)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 9,
+          name: "Local profile",
+          provider: "openai_compatible",
+          base_url: "http://localhost:11434/v1",
+          model: "qwen",
+          api_key: "sk-l****",
+          params: { temperature: 0 },
+          is_default: true,
+        },
+      ]);
+    vi.mocked(api.createLLMProfile).mockResolvedValue({
+      id: 9,
+      name: "Local profile",
+      provider: "openai_compatible",
+      base_url: "http://localhost:11434/v1",
+      model: "qwen",
+      api_key: "sk-l****",
+      params: { temperature: 0 },
+      is_default: true,
+    });
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.type(screen.getByLabelText("Profile name"), "Local profile");
+    await user.clear(screen.getByLabelText("Provider"));
+    await user.type(screen.getByLabelText("Provider"), "openai_compatible");
+    await user.type(screen.getByLabelText("Model"), "qwen");
+    await user.type(screen.getByLabelText("Base URL"), "http://localhost:11434/v1");
+    await user.type(screen.getByLabelText("API key"), "sk-local");
+    await user.click(screen.getByLabelText("Advanced params (JSON)"));
+    await user.paste("{\"temperature\":0}");
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+
+    await waitFor(() =>
+      expect(api.createLLMProfile).toHaveBeenCalledWith({
+        name: "Local profile",
+        provider: "openai_compatible",
+        base_url: "http://localhost:11434/v1",
+        model: "qwen",
+        api_key: "sk-local",
+        params: { temperature: 0 },
+        is_default: true,
+      }),
+    );
+    await waitFor(() => expect(api.listLLMProfiles).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText("Use Local profile for research")).toBeChecked();
+  });
+
+  it("saves the source limit through the wrapped preference contract", async () => {
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const input = await screen.findByLabelText("Max sources");
+    await user.clear(input);
+    await user.type(input, "12");
+    await user.click(screen.getByRole("button", { name: "Save source limit" }));
+
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith("max_sources", 12));
+    expect(await screen.findByText("Source limit saved.")).toBeInTheDocument();
+  });
+
+  it("creates an MCP server and refreshes the server list", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listMCPServers)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 3,
+          name: "bocha",
+          transport: "stdio",
+          command: "npx",
+          args: ["-y", "@humansean/mcp-bocha"],
+          env: { BOCHA_API_KEY: "secr****" },
+          url: null,
+          enabled: true,
+        },
+      ]);
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    await user.clear(screen.getByLabelText("MCP server name"));
+    await user.type(screen.getByLabelText("MCP server name"), "bocha");
+    await user.type(screen.getByLabelText("Command"), "npx");
+    await user.clear(screen.getByLabelText("Arguments (one per line)"));
+    await user.type(screen.getByLabelText("Arguments (one per line)"), "-y{enter}@humansean/mcp-bocha");
+    await user.type(screen.getByLabelText("Environment variables (KEY=value)"), "BOCHA_API_KEY=secret");
+    await user.click(screen.getByRole("button", { name: "Save server" }));
+
+    await waitFor(() =>
+      expect(api.createMCPServer).toHaveBeenCalledWith({
+        name: "bocha",
+        transport: "stdio",
+        command: "npx",
+        args: ["-y", "@humansean/mcp-bocha"],
+        env: { BOCHA_API_KEY: "secret" },
+        url: null,
+        enabled: true,
+      }),
+    );
+    await waitFor(() => expect(api.listMCPServers).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("bocha")).toBeInTheDocument();
   });
 });

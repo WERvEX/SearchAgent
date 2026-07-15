@@ -35,7 +35,10 @@ describe("api client", () => {
       }),
     );
 
-    await expect(api.getConversation(99)).rejects.toThrow("Conversation not found");
+    await expect(api.getConversation(99)).rejects.toMatchObject({
+      message: "Conversation not found",
+      status: 404,
+    });
   });
 
   it("keeps the backend-wrapped preference value shape", async () => {

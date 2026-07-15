@@ -3,6 +3,8 @@ import { api } from "./api/client";
 import type {
   ConversationDetail,
   ConversationRead,
+  MCPServer,
+  PreferenceRead,
   LLMProfileRead,
   ReportRead,
   ResearchLifecycleEvent,
@@ -15,6 +17,7 @@ import { PlanPanel, type ResearchPlan } from "./components/PlanPanel";
 import { ProgressStream } from "./components/ProgressStream";
 import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { useEventStream } from "./hooks/useEventStream";
 
 function createPlaceholderRun(threadId: string): ResearchRunResponse {
@@ -32,6 +35,33 @@ function deriveRunPhaseFromResponse(run: ResearchRunResponse): ResearchRunPhase 
 
 function isStableRunPhase(phase: ResearchRunPhase) {
   return phase === "awaiting_approval" || phase === "completed" || phase === "failed";
+}
+
+function resolveSelectedProfileId(
+  profileList: LLMProfileRead[],
+  options: { preferredId?: number | null; currentId?: number | null } = {},
+) {
+  const { preferredId = null, currentId = null } = options;
+
+  if (preferredId !== null && profileList.some((profile) => profile.id === preferredId)) {
+    return preferredId;
+  }
+
+  if (currentId !== null && profileList.some((profile) => profile.id === currentId)) {
+    return currentId;
+  }
+
+  return profileList.find((profile) => profile.is_default)?.id ?? profileList[0]?.id ?? null;
+}
+
+function readMaxSourcesPreference(preference: PreferenceRead) {
+  return typeof preference.value.value === "number" ? preference.value.value : null;
+}
+
+function getErrorStatus(error: unknown) {
+  return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
+    ? error.status
+    : null;
 }
 
 function statusMessageForPhase(phase: ResearchRunPhase) {
@@ -87,6 +117,8 @@ export default function App() {
   const [activeConversation, setActiveConversation] = useState<ConversationDetail | null>(null);
   const [profiles, setProfiles] = useState<LLMProfileRead[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
+  const [servers, setServers] = useState<MCPServer[]>([]);
+  const [maxSources, setMaxSources] = useState(8);
   const [currentRun, setCurrentRun] = useState<ResearchRunResponse | null>(null);
   const [retainedReportId, setRetainedReportId] = useState<number | null>(null);
   const [report, setReport] = useState<ReportRead | null>(null);
@@ -149,22 +181,57 @@ export default function App() {
     onEvent: handleLifecycleEvent,
   });
 
+  const loadMaxSourcesPreference = useCallback(async () => {
+    try {
+      const preference = await api.getPreference("max_sources");
+      return readMaxSourcesPreference(preference) ?? 8;
+    } catch (error) {
+      if (getErrorStatus(error) === 404) {
+        return 8;
+      }
+      throw error;
+    }
+  }, []);
+
+  const refreshProfiles = useCallback(async (options: { preferredId?: number | null; keepCurrent?: boolean } = {}) => {
+    const profileList = await api.listLLMProfiles();
+    setProfiles(profileList);
+    setSelectedProfileId((currentId) =>
+      resolveSelectedProfileId(profileList, {
+        preferredId: options.preferredId ?? null,
+        currentId: options.keepCurrent ? currentId : null,
+      }),
+    );
+    return profileList;
+  }, []);
+
+  const refreshServers = useCallback(async () => {
+    const serverList = await api.listMCPServers();
+    setServers(serverList);
+    return serverList;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     async function loadInitialState() {
       try {
         setErrorMessage(null);
-        const [conversationList, profileList] = await Promise.all([api.listConversations(), api.listLLMProfiles()]);
+        const [conversationList, profileList, serverList, sourceLimit] = await Promise.all([
+          api.listConversations(),
+          api.listLLMProfiles(),
+          api.listMCPServers(),
+          loadMaxSourcesPreference(),
+        ]);
         if (cancelled) {
           return;
         }
 
         setConversations(conversationList);
         setProfiles(profileList);
-
-        const defaultProfile = profileList.find((profile) => profile.is_default) ?? profileList[0] ?? null;
-        setSelectedProfileId(defaultProfile?.id ?? null);
+        setServers(serverList);
+        setMaxSources(sourceLimit);
+        setSelectedProfileId(resolveSelectedProfileId(profileList));
 
         if (conversationList[0]) {
           setActiveConversationId(conversationList[0].id);
@@ -184,7 +251,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadMaxSourcesPreference]);
 
   useEffect(() => {
     if (activeConversationId === null) {
@@ -415,6 +482,39 @@ export default function App() {
     }
   }
 
+  async function handleCreateProfile(payload: {
+    name: string;
+    provider: string;
+    base_url?: string | null;
+    model: string;
+    api_key?: string | null;
+    params?: Record<string, unknown> | null;
+    is_default?: boolean;
+  }) {
+    const created = await api.createLLMProfile(payload);
+    await refreshProfiles({
+      preferredId: payload.is_default ? created.id : null,
+      keepCurrent: !payload.is_default,
+    });
+  }
+
+  async function handleTestProfile(profileId: number) {
+    return api.testLLMProfile(profileId);
+  }
+
+  async function handleSaveMaxSources(value: number) {
+    const saved = await api.setPreference("max_sources", value);
+    setMaxSources(readMaxSourcesPreference(saved) ?? value);
+  }
+
+  async function handleCreateServer(payload: Omit<MCPServer, "id">) {
+    await api.createMCPServer(payload);
+    await refreshServers();
+  }
+
+  const backendDefaultProfile = profiles.find((profile) => profile.is_default) ?? null;
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
+
   return (
     <AppShell
       activePanel={activePanel}
@@ -429,7 +529,17 @@ export default function App() {
       }
       main={
         activePanel === "settings" ? (
-          <div className="p-6 text-sm text-zinc-600">Settings panel is not part of Task 3.</div>
+          <SettingsPanel
+            profiles={profiles}
+            selectedProfileId={selectedProfileId}
+            servers={servers}
+            maxSources={maxSources}
+            onSelectProfile={setSelectedProfileId}
+            onCreateProfile={handleCreateProfile}
+            onTestProfile={handleTestProfile}
+            onSaveMaxSources={handleSaveMaxSources}
+            onCreateServer={handleCreateServer}
+          />
         ) : (
           <div className="flex h-full flex-col">
             <div className="border-b border-zinc-200 bg-zinc-50 px-6 py-3 text-sm text-zinc-600">
@@ -466,7 +576,31 @@ export default function App() {
       }
       right={
         activePanel === "settings" ? (
-          <div className="p-4 text-sm text-zinc-600">Progress stream and reports are out of scope for Task 3.</div>
+          <section className="h-full overflow-auto bg-white">
+            <div className="border-b border-zinc-200 px-4 py-4">
+              <h2 className="text-sm font-semibold text-zinc-950">Research summary</h2>
+              <p className="mt-1 text-xs text-zinc-500">Current session choices pulled from backend settings.</p>
+            </div>
+            <dl className="divide-y divide-zinc-200 text-sm">
+              <div className="px-4 py-3">
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">Active profile</dt>
+                <dd className="mt-1 text-zinc-900">{selectedProfile?.name ?? "No profile selected"}</dd>
+              </div>
+              <div className="px-4 py-3">
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">Backend default</dt>
+                <dd className="mt-1 text-zinc-900">{backendDefaultProfile?.name ?? "Not configured"}</dd>
+              </div>
+              <div className="px-4 py-3">
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">Max sources</dt>
+                <dd className="mt-1 text-zinc-900">{maxSources}</dd>
+              </div>
+              <div className="px-4 py-3">
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">MCP servers</dt>
+                <dd className="mt-1 text-zinc-900">{servers.length}</dd>
+              </div>
+            </dl>
+            {errorMessage ? <p className="px-4 py-3 text-sm text-red-600">{errorMessage}</p> : null}
+          </section>
         ) : (
           <div className="grid h-full grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
             <PlanPanel

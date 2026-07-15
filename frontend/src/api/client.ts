@@ -19,7 +19,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       message = `Request failed with ${response.status}`;
     }
-    throw new Error(message);
+    const error = new Error(message) as Error & { status: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json() as Promise<T>;
 }
