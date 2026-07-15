@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
-import type { ConversationDetail, ConversationRead, LLMProfileRead, ResearchRunResponse } from "./api/types";
+import type { ConversationDetail, ConversationRead, LLMProfileRead, ReportRead, ResearchRunResponse } from "./api/types";
 import { AppPanel, AppShell } from "./components/AppShell";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { PlanPanel, type ResearchPlan } from "./components/PlanPanel";
+import { ProgressStream } from "./components/ProgressStream";
+import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
+import { useEventStream } from "./hooks/useEventStream";
+
+function EventProgressStream() {
+  const eventStream = useEventStream(80);
+
+  return <ProgressStream status={eventStream.status} events={eventStream.events} />;
+}
 
 export default function App() {
   const [activePanel, setActivePanel] = useState<AppPanel>("research");
@@ -14,8 +23,11 @@ export default function App() {
   const [profiles, setProfiles] = useState<LLMProfileRead[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
   const [currentRun, setCurrentRun] = useState<ResearchRunResponse | null>(null);
+  const [report, setReport] = useState<ReportRead | null>(null);
   const [statusMessage, setStatusMessage] = useState("Loading workspace...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const reportId = typeof currentRun?.state.report_id === "number" ? currentRun.state.report_id : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +99,37 @@ export default function App() {
       cancelled = true;
     };
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (reportId === null) {
+      setReport(null);
+      return;
+    }
+
+    const id = reportId;
+
+    let cancelled = false;
+
+    async function loadReport() {
+      try {
+        const nextReport = await api.getReport(id);
+        if (!cancelled) {
+          setReport(nextReport);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setReport(null);
+          setErrorMessage(error instanceof Error ? error.message : "Failed to load report.");
+        }
+      }
+    }
+
+    void loadReport();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reportId]);
 
   const plan = useMemo(() => {
     const payload = currentRun?.interrupt_payload;
@@ -179,6 +222,30 @@ export default function App() {
     }
   }
 
+  async function handleLoadReport() {
+    if (reportId === null) {
+      return;
+    }
+
+    try {
+      setErrorMessage(null);
+      setReport(await api.getReport(reportId));
+      setStatusMessage("Report loaded.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load report.");
+    }
+  }
+
+  async function handleExportPdf(reportIdToExport: number) {
+    try {
+      setErrorMessage(null);
+      await api.exportPdf(reportIdToExport);
+      setStatusMessage("PDF export completed.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to export PDF.");
+    }
+  }
+
   return (
     <AppShell
       activePanel={activePanel}
@@ -207,13 +274,23 @@ export default function App() {
               )}
               {errorMessage ? <div className="mt-1 text-xs text-red-600">{errorMessage}</div> : null}
             </div>
-            <div className="min-h-0 flex-1">
-              <ResearchWorkspace
-                conversation={activeConversation}
-                profileId={selectedProfileId}
-                currentRun={currentRun}
-                onStart={handleStartResearch}
-              />
+            <div className="min-h-0 flex-1 overflow-auto">
+              <div className={reportId === null ? "h-full" : "min-h-full"}>
+                <ResearchWorkspace
+                  conversation={activeConversation}
+                  profileId={selectedProfileId}
+                  currentRun={currentRun}
+                  onStart={handleStartResearch}
+                />
+              </div>
+              {reportId !== null ? (
+                <ReportPanel
+                  report={report}
+                  markdownUrl={api.markdownDownloadUrl(reportId)}
+                  onLoadReport={handleLoadReport}
+                  onExportPdf={handleExportPdf}
+                />
+              ) : null}
             </div>
           </div>
         )
@@ -222,12 +299,19 @@ export default function App() {
         activePanel === "settings" ? (
           <div className="p-4 text-sm text-zinc-600">Progress stream and reports are out of scope for Task 3.</div>
         ) : (
-          <PlanPanel
-            interrupted={currentRun?.interrupted ?? false}
-            plan={plan}
-            onApprove={handleResumeResearch}
-            onReplan={handleResumeResearch}
-          />
+          <div className="grid h-full grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
+            <PlanPanel
+              interrupted={currentRun?.interrupted ?? false}
+              plan={plan}
+              onApprove={handleResumeResearch}
+              onReplan={handleResumeResearch}
+            />
+            {typeof EventSource === "undefined" ? (
+              <ProgressStream status="unavailable" events={[]} />
+            ) : (
+              <EventProgressStream />
+            )}
+          </div>
         )
       }
     />
