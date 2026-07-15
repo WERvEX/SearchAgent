@@ -353,6 +353,48 @@ describe("App", () => {
     expect(screen.getByText("Start request failed")).toBeInTheDocument();
   });
 
+  it("recovers to idle when startResearch rejects after an early research.started SSE", async () => {
+    const user = userEvent.setup();
+    let rejectStart: (error: Error) => void;
+    vi.mocked(api.startResearch).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectStart = reject;
+        }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    const request = screen.getByLabelText("Research request");
+    const startButton = screen.getByRole("button", { name: "Start" });
+    await user.type(request, "Compare search APIs");
+    await user.click(startButton);
+
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    const conversationSource = MockEventSource.instance;
+
+    act(() => {
+      conversationSource?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9 }),
+        lastEventId: "evt-start-reject-1",
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100"));
+    expect(await screen.findByText("Research in progress.")).toBeInTheDocument();
+    expect(startButton).toBeDisabled();
+
+    await act(async () => {
+      rejectStart!(new Error("Late start rejection"));
+    });
+
+    expect(await screen.findByText("Ready for research.")).toBeInTheDocument();
+    expect(screen.getByText("Late start rejection")).toBeInTheDocument();
+    await user.type(request, "Retry request");
+    expect(startButton).toBeEnabled();
+  });
+
   it("returns to conversation-scoped subscription before restarting after completion and promotes on research.started", async () => {
     const user = userEvent.setup();
     let resolveRestart: (run: { thread_id: string; state: {}; interrupted: false; interrupt_payload: null }) => void;
@@ -547,6 +589,61 @@ describe("App", () => {
     expect(await screen.findByText("Plan decision required.")).toBeInTheDocument();
     expect(screen.getByText("Resume request failed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /approve plan/i })).toBeEnabled();
+  });
+
+  it("recovers to awaiting approval when resumeResearch rejects after an early research.resumed SSE", async () => {
+    const user = userEvent.setup();
+    let rejectResume: (error: Error) => void;
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: {},
+      interrupted: true,
+      interrupt_payload: {
+        plan: {
+          summary: "Choose a scope.",
+          options: [{ id: "A", label: "Broad scope" }],
+        },
+      },
+    });
+    vi.mocked(api.resumeResearch).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectResume = reject;
+        }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await screen.findByText("Choose a scope.");
+    const approveButton = screen.getByRole("button", { name: /approve plan/i });
+    const replanButton = screen.getByRole("button", { name: /replan/i });
+
+    await user.click(approveButton);
+    expect(await screen.findByText("Resuming research.")).toBeInTheDocument();
+    expect(approveButton).toBeDisabled();
+    expect(replanButton).toBeDisabled();
+
+    act(() => {
+      MockEventSource.instance?.listeners.get("research.resumed")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9 }),
+        lastEventId: "evt-resume-reject-1",
+      } as MessageEvent<string>);
+    });
+
+    expect(await screen.findByText("Research in progress.")).toBeInTheDocument();
+
+    await act(async () => {
+      rejectResume!(new Error("Late resume rejection"));
+    });
+
+    expect(await screen.findByText("Plan decision required.")).toBeInTheDocument();
+    expect(screen.getByText("Late resume rejection")).toBeInTheDocument();
+    expect(approveButton).toBeEnabled();
+    expect(replanButton).toBeEnabled();
   });
 
   it("prevents duplicate research starts while a started run is still in progress", async () => {

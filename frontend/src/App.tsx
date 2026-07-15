@@ -340,8 +340,12 @@ export default function App() {
         if (runPhaseRef.current === "completed" || runPhaseRef.current === "failed") {
           return;
         }
-        updateRunPhase((current) => (current === "starting" ? "idle" : current));
-        setStatusMessage(statusMessageForPhase("idle"));
+        let recoveredPhase: ResearchRunPhase = "idle";
+        updateRunPhase((current) => {
+          recoveredPhase = current === "completed" || current === "failed" ? current : "idle";
+          return recoveredPhase;
+        });
+        setStatusMessage(statusMessageForPhase(recoveredPhase));
         setErrorMessage(error instanceof Error ? error.message : "Failed to start research.");
       }
   }
@@ -385,8 +389,12 @@ export default function App() {
         if (runPhaseRef.current === "completed" || runPhaseRef.current === "failed") {
           return;
         }
-        updateRunPhase((current) => (current === "resuming" ? "awaiting_approval" : current));
-        setStatusMessage(statusMessageForPhase("awaiting_approval"));
+        let recoveredPhase: ResearchRunPhase = "awaiting_approval";
+        updateRunPhase((current) => {
+          recoveredPhase = current === "completed" || current === "failed" ? current : "awaiting_approval";
+          return recoveredPhase;
+        });
+        setStatusMessage(statusMessageForPhase(recoveredPhase));
         setErrorMessage(error instanceof Error ? error.message : "Failed to resume research.");
       } finally {
       resumePendingRef.current = false;
