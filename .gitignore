@@ -6,3 +6,4 @@ frontend/.npm-cache/
 frontend/tsconfig.tsbuildinfo
 backend/.test-tmp*/
 backend/.tmp-pytest*/
+backend/.runtime-check-*/
