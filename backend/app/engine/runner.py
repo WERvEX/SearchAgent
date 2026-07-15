@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional
 from langgraph.types import Command
 from sqlalchemy.orm import Session
 
+from app.core.events import get_event_bus
 from app.db.models import Message, ResearchProject
 from app.engine.checkpointer import create_checkpointer
 from app.engine.context import EngineContext
@@ -47,6 +48,20 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
     session.commit()
 
 
+def _publish_lifecycle(event_type: str, *, thread_id: str, state: dict, **details: Any) -> None:
+    metadata = {
+        "run_id": state.get("run_id") or thread_id,
+        "conversation_id": state.get("conversation_id"),
+        "project_id": state.get("project_id"),
+    }
+    get_event_bus().publish(
+        {
+            "type": event_type,
+            "data": {key: value for key, value in {**metadata, **details}.items() if value is not None},
+        }
+    )
+
+
 async def start_research(
     session: Session,
     *,
@@ -76,6 +91,7 @@ async def start_research(
     graph = compile_research_graph(ctx, checkpointer=create_checkpointer())
 
     initial_state = {
+        "run_id": thread_id,
         "conversation_id": conversation_id,
         "project_id": project.id,
         "messages": [{"role": "user", "content": user_message}],
@@ -85,8 +101,20 @@ async def start_research(
         "steps": [],
         "findings": [],
         "report_md": None,
+        "report_id": None,
     }
-    result = graph.invoke(initial_state, config)
+    _publish_lifecycle("research.started", thread_id=thread_id, state=initial_state)
+    try:
+        result = graph.invoke(initial_state, config)
+    except Exception:
+        _update_project_status(session, initial_state, "failed")
+        _publish_lifecycle(
+            "research.failed",
+            thread_id=thread_id,
+            state=initial_state,
+            message="Research run failed.",
+        )
+        raise
     payload = _interrupt_payload(result, graph, config)
     state = _state_without_interrupt(result)
     _update_project_status(
@@ -94,6 +122,20 @@ async def start_research(
         state,
         "awaiting_approval" if payload is not None else "done",
     )
+    if payload is not None:
+        _publish_lifecycle(
+            "research.awaiting_approval",
+            thread_id=thread_id,
+            state=state,
+            option_count=len((state.get("plan") or {}).get("options", [])),
+        )
+    else:
+        _publish_lifecycle(
+            "research.completed",
+            thread_id=thread_id,
+            state=state,
+            report_id=state.get("report_id"),
+        )
 
     return {
         "thread_id": thread_id,
@@ -115,7 +157,20 @@ async def resume_research(
     ctx = EngineContext(session=session, profile_id=profile_id, llm_factory=llm_factory)
     graph = compile_research_graph(ctx, checkpointer=create_checkpointer())
 
-    result = graph.invoke(Command(resume=decision), config)
+    graph_state = graph.get_state(config)
+    state_before = dict(getattr(graph_state, "values", {}) or {})
+    _publish_lifecycle("research.resumed", thread_id=thread_id, state=state_before)
+    try:
+        result = graph.invoke(Command(resume=decision), config)
+    except Exception:
+        _update_project_status(session, state_before, "failed")
+        _publish_lifecycle(
+            "research.failed",
+            thread_id=thread_id,
+            state=state_before,
+            message="Research run failed.",
+        )
+        raise
     payload = _interrupt_payload(result, graph, config)
     state = _state_without_interrupt(result)
     _update_project_status(
@@ -123,6 +178,20 @@ async def resume_research(
         state,
         "awaiting_approval" if payload is not None else "done",
     )
+    if payload is not None:
+        _publish_lifecycle(
+            "research.awaiting_approval",
+            thread_id=thread_id,
+            state=state,
+            option_count=len((state.get("plan") or {}).get("options", [])),
+        )
+    else:
+        _publish_lifecycle(
+            "research.completed",
+            thread_id=thread_id,
+            state=state,
+            report_id=state.get("report_id"),
+        )
 
     return {
         "thread_id": thread_id,

@@ -1,6 +1,3 @@
-from fastapi.testclient import TestClient
-
-
 def test_event_bus_broadcasts_to_each_subscriber(app_home):
     import queue
     import threading
@@ -8,11 +5,11 @@ def test_event_bus_broadcasts_to_each_subscriber(app_home):
     from app.core.events import EventBus
 
     bus = EventBus()
-    first = bus.subscribe(limit=1)
-    second = bus.subscribe(limit=1)
+    first = bus.subscribe()
+    second = bus.subscribe()
     received = queue.Queue()
 
-    bus.publish({"type": "progress", "message": "running"})
+    published = bus.publish({"type": "research.progress", "data": {"message": "running"}})
 
     def collect(name, iterator):
         received.put((name, next(iterator)))
@@ -31,29 +28,30 @@ def test_event_bus_broadcasts_to_each_subscriber(app_home):
         pass
 
     assert sorted(results) == [
-        ("first", {"type": "progress", "message": "running"}),
-        ("second", {"type": "progress", "message": "running"}),
+        ("first", published),
+        ("second", published),
     ]
 
 
 def test_event_bus_formats_sse_messages(app_home):
     from app.core.events import format_sse
 
-    assert format_sse({"type": "progress", "message": "running"}) == (
-        'data: {"type":"progress","message":"running"}\n\n'
+    assert format_sse(
+        {"id": "7", "type": "research.progress", "data": {"message": "running"}}
+    ) == (
+        'id: 7\nevent: research.progress\ndata: {"message":"running"}\n\n'
     )
 
 
-def test_events_endpoint_streams_published_event(app_home):
-    from app.core.events import get_event_bus
-    from app.main import create_app
+def test_event_bus_replays_only_events_after_last_event_id_and_stays_live(app_home):
+    from app.core.events import EventBus
 
-    bus = get_event_bus()
-    bus.publish({"type": "progress", "message": "running"})
+    bus = EventBus(history_size=10)
+    first = bus.publish({"type": "research.started", "data": {"run_id": "run-1"}})
+    second = bus.publish({"type": "research.plan_ready", "data": {"run_id": "run-1"}})
 
-    client = TestClient(create_app())
-    with client.stream("GET", "/events?limit=1") as response:
-        body = next(response.iter_text())
+    subscriber = bus.subscribe(last_event_id=first["id"], replay_limit=1)
+    assert next(subscriber) == second
 
-    assert response.status_code == 200
-    assert '"type":"progress"' in body
+    third = bus.publish({"type": "research.completed", "data": {"run_id": "run-1"}})
+    assert next(subscriber) == third

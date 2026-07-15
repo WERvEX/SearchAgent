@@ -5,6 +5,7 @@ from typing_extensions import TypedDict
 
 
 class ResearchState(TypedDict):
+    run_id: Optional[str]
     conversation_id: int
     project_id: int
     messages: Annotated[list, add_messages]
@@ -14,3 +15,4 @@ class ResearchState(TypedDict):
     steps: list[dict]
     findings: list[dict]
     report_md: Optional[str]
+    report_id: Optional[int]

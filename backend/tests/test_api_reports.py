@@ -102,3 +102,9 @@ def test_report_pdf_export_uses_service(app_home, monkeypatch):
     exported = client.post(f"/reports/{report_id}/export.pdf").json()
     assert exported["format"] == "pdf"
     assert exported["file_path"].endswith("report.pdf")
+
+    downloaded = client.get(f"/reports/{report_id}/download.pdf")
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/pdf"
+    assert downloaded.headers["content-disposition"] == 'attachment; filename="report.pdf"'
+    assert downloaded.content == b"%PDF-test"

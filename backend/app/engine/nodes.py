@@ -7,6 +7,7 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from app.core.events import get_event_bus
 from app.db.models import Source
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
@@ -261,6 +262,14 @@ def _build_report_markdown(state: ResearchState) -> str:
 def make_nodes(ctx: EngineContext):
     """Return a dict of node-name -> callable for the research graph."""
 
+    def publish_progress(event_type: str, state: ResearchState, **details: Any) -> None:
+        metadata = {
+            key: state[key]
+            for key in ("run_id", "conversation_id", "project_id")
+            if state.get(key) is not None
+        }
+        get_event_bus().publish({"type": event_type, "data": {**metadata, **details}})
+
     def clarify_intent(state: ResearchState) -> dict:
         if state.get("objective"):
             return {}
@@ -286,6 +295,7 @@ def make_nodes(ctx: EngineContext):
 
     def generate_plan(state: ResearchState) -> dict:
         objective = state["objective"]
+        plan = None
         try:
             llm = _get_llm(ctx)
             prompt = (
@@ -296,10 +306,21 @@ def make_nodes(ctx: EngineContext):
             response_text = _llm_content(llm.invoke(prompt))
             plan = _parse_json_content(response_text)
             if isinstance(plan, dict) and "summary" in plan and "options" in plan:
+                publish_progress(
+                    "research.plan_ready",
+                    state,
+                    option_count=len(plan.get("options", [])),
+                )
                 return {"plan": plan}
         except Exception:
             pass
-        return {"plan": _fallback_plan(objective)}
+        plan = _fallback_plan(objective)
+        publish_progress(
+            "research.plan_ready",
+            state,
+            option_count=len(plan.get("options", [])),
+        )
+        return {"plan": plan}
 
     def await_plan_approval(state: ResearchState) -> dict:
         decision = interrupt({"plan": state.get("plan"), "message": "请确认或选择方案"})
@@ -372,6 +393,12 @@ def make_nodes(ctx: EngineContext):
                 )
 
         ctx.session.commit()
+        publish_progress(
+            "research.sources_collected",
+            state,
+            source_count=len(findings),
+            tool_count=len(tools_by_name),
+        )
         return {"findings": findings}
 
     def aggregate_evidence(state: ResearchState) -> dict:
@@ -384,8 +411,9 @@ def make_nodes(ctx: EngineContext):
 
         report_md = _build_report_markdown(state)
         sync_plan_and_steps(ctx.session, state)
-        persist_report(ctx.session, project_id=state["project_id"], content_md=report_md)
-        return {"report_md": report_md}
+        report = persist_report(ctx.session, project_id=state["project_id"], content_md=report_md)
+        publish_progress("research.report_ready", state, report_id=report.id)
+        return {"report_md": report_md, "report_id": report.id}
 
     return {
         "clarify_intent": clarify_intent,
