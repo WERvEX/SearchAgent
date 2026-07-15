@@ -161,4 +161,40 @@ describe("SettingsPanel", () => {
     expect(await screen.findByText("MCP server saved.")).toBeInTheDocument();
     expect(screen.getByLabelText("Environment variables (KEY=value)")).toHaveValue("");
   });
+
+  it("sends the HTTP MCP payload with null command and args", async () => {
+    const user = userEvent.setup();
+    const onCreateServer = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <SettingsPanel
+        profiles={[]}
+        selectedProfileId={null}
+        servers={[]}
+        maxSources={8}
+        onSelectProfile={vi.fn()}
+        onCreateProfile={vi.fn().mockResolvedValue(undefined)}
+        onTestProfile={vi.fn().mockResolvedValue({ ok: true, error: null })}
+        onSaveMaxSources={vi.fn().mockResolvedValue(undefined)}
+        onCreateServer={onCreateServer}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("MCP server name"), "remote-tools");
+    await user.selectOptions(screen.getByLabelText("Transport"), "http");
+    await user.type(screen.getByLabelText("URL"), "http://localhost:9000/mcp");
+    await user.click(screen.getByRole("button", { name: "Save server" }));
+
+    await waitFor(() =>
+      expect(onCreateServer).toHaveBeenCalledWith({
+        name: "remote-tools",
+        transport: "http",
+        command: null,
+        args: null,
+        env: null,
+        url: "http://localhost:9000/mcp",
+        enabled: true,
+      }),
+    );
+  });
 });

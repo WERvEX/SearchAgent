@@ -730,22 +730,30 @@ describe("App", () => {
     expect(screen.queryByText("Preference not found")).not.toBeInTheDocument();
   });
 
-  it("creates a profile, refreshes the list, and selects the refreshed backend default", async () => {
+  it("keeps the conversation workspace usable when settings requests fail on mount", async () => {
     const user = userEvent.setup();
-    vi.mocked(api.listLLMProfiles)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 9,
-          name: "Local profile",
-          provider: "openai_compatible",
-          base_url: "http://localhost:11434/v1",
-          model: "qwen",
-          api_key: "sk-l****",
-          params: { temperature: 0 },
-          is_default: true,
-        },
-      ]);
+    vi.mocked(api.listLLMProfiles).mockRejectedValue(new Error("Profiles unavailable"));
+    vi.mocked(api.listMCPServers).mockRejectedValue(new Error("MCP unavailable"));
+    vi.mocked(api.getPreference).mockRejectedValue(new Error("Preference unavailable"));
+
+    render(<App />);
+
+    expect(await screen.findByText("Search API evaluation")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Research request")).toBeInTheDocument();
+    expect(screen.queryByText("Unable to load workspace.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Profiles unavailable")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(await screen.findByText("Profiles unavailable")).toBeInTheDocument();
+    expect(screen.getByText("MCP unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Preference unavailable")).toBeInTheDocument();
+    expect(screen.getByLabelText("Max sources")).toHaveValue(8);
+  });
+
+  it("creates a profile from the returned record and selects it without refreshing the list", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listLLMProfiles).mockResolvedValueOnce([]);
     vi.mocked(api.createLLMProfile).mockResolvedValue({
       id: 9,
       name: "Local profile",
@@ -782,7 +790,7 @@ describe("App", () => {
         is_default: true,
       }),
     );
-    await waitFor(() => expect(api.listLLMProfiles).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.listLLMProfiles).toHaveBeenCalledTimes(1));
     expect(await screen.findByLabelText("Use Local profile for research")).toBeChecked();
   });
 
@@ -802,22 +810,8 @@ describe("App", () => {
     expect(await screen.findByText("Source limit saved.")).toBeInTheDocument();
   });
 
-  it("creates an MCP server and refreshes the server list", async () => {
+  it("creates an MCP server from the returned record without refreshing the list", async () => {
     const user = userEvent.setup();
-    vi.mocked(api.listMCPServers)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 3,
-          name: "bocha",
-          transport: "stdio",
-          command: "npx",
-          args: ["-y", "@humansean/mcp-bocha"],
-          env: { BOCHA_API_KEY: "secr****" },
-          url: null,
-          enabled: true,
-        },
-      ]);
 
     render(<App />);
 
@@ -843,7 +837,7 @@ describe("App", () => {
         enabled: true,
       }),
     );
-    await waitFor(() => expect(api.listMCPServers).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.listMCPServers).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("bocha")).toBeInTheDocument();
   });
 });

@@ -7,6 +7,11 @@ type SettingsPanelProps = {
   selectedProfileId: number | null;
   servers: MCPServer[];
   maxSources: number;
+  loadErrors?: {
+    profiles: string | null;
+    maxSources: string | null;
+    servers: string | null;
+  };
   onSelectProfile: (profileId: number) => void;
   onCreateProfile: (payload: LLMProfileCreate) => Promise<void> | void;
   onTestProfile: (profileId: number) => Promise<{ ok: boolean; error: string | null }>;
@@ -86,6 +91,7 @@ export function SettingsPanel({
   selectedProfileId,
   servers,
   maxSources,
+  loadErrors,
   onSelectProfile,
   onCreateProfile,
   onTestProfile,
@@ -372,6 +378,7 @@ export function SettingsPanel({
                 {profileFeedback.message}
               </p>
             ) : null}
+            {loadErrors?.profiles ? <p role="alert" className="text-sm text-red-600">{loadErrors.profiles}</p> : null}
             {profileTestFeedback ? (
               <p role={profileTestFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(profileTestFeedback.tone)}`}>
                 {profileTestFeedback.message}
@@ -463,6 +470,7 @@ export function SettingsPanel({
             </label>
 
             {maxSourcesState.error ? <p className="text-sm text-red-600">{maxSourcesState.error}</p> : null}
+            {loadErrors?.maxSources ? <p role="alert" className="text-sm text-red-600">{loadErrors.maxSources}</p> : null}
             {maxSourcesFeedback ? (
               <p role={maxSourcesFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(maxSourcesFeedback.tone)}`}>
                 {maxSourcesFeedback.message}
@@ -550,6 +558,7 @@ export function SettingsPanel({
             </div>
 
             {serverValidation ? <p className="text-sm text-zinc-500">{serverValidation}</p> : null}
+            {loadErrors?.servers ? <p role="alert" className="text-sm text-red-600">{loadErrors.servers}</p> : null}
             {serverFeedback ? (
               <p role={serverFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(serverFeedback.tone)}`}>
                 {serverFeedback.message}

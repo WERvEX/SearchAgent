@@ -58,6 +58,12 @@ function readMaxSourcesPreference(preference: PreferenceRead) {
   return typeof preference.value.value === "number" ? preference.value.value : null;
 }
 
+type SettingsLoadErrors = {
+  profiles: string | null;
+  maxSources: string | null;
+  servers: string | null;
+};
+
 function getErrorStatus(error: unknown) {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
     ? error.status
@@ -119,6 +125,11 @@ export default function App() {
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [maxSources, setMaxSources] = useState(8);
+  const [settingsLoadErrors, setSettingsLoadErrors] = useState<SettingsLoadErrors>({
+    profiles: null,
+    maxSources: null,
+    servers: null,
+  });
   const [currentRun, setCurrentRun] = useState<ResearchRunResponse | null>(null);
   const [retainedReportId, setRetainedReportId] = useState<number | null>(null);
   const [report, setReport] = useState<ReportRead | null>(null);
@@ -193,45 +204,18 @@ export default function App() {
     }
   }, []);
 
-  const refreshProfiles = useCallback(async (options: { preferredId?: number | null; keepCurrent?: boolean } = {}) => {
-    const profileList = await api.listLLMProfiles();
-    setProfiles(profileList);
-    setSelectedProfileId((currentId) =>
-      resolveSelectedProfileId(profileList, {
-        preferredId: options.preferredId ?? null,
-        currentId: options.keepCurrent ? currentId : null,
-      }),
-    );
-    return profileList;
-  }, []);
-
-  const refreshServers = useCallback(async () => {
-    const serverList = await api.listMCPServers();
-    setServers(serverList);
-    return serverList;
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
 
     async function loadInitialState() {
       try {
         setErrorMessage(null);
-        const [conversationList, profileList, serverList, sourceLimit] = await Promise.all([
-          api.listConversations(),
-          api.listLLMProfiles(),
-          api.listMCPServers(),
-          loadMaxSourcesPreference(),
-        ]);
+        const conversationList = await api.listConversations();
         if (cancelled) {
           return;
         }
 
         setConversations(conversationList);
-        setProfiles(profileList);
-        setServers(serverList);
-        setMaxSources(sourceLimit);
-        setSelectedProfileId(resolveSelectedProfileId(profileList));
 
         if (conversationList[0]) {
           setActiveConversationId(conversationList[0].id);
@@ -247,6 +231,67 @@ export default function App() {
     }
 
     void loadInitialState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadMaxSourcesPreference]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSettingsState() {
+      setSettingsLoadErrors({
+        profiles: null,
+        maxSources: null,
+        servers: null,
+      });
+
+      const [profileResult, sourceLimitResult, serverResult] = await Promise.allSettled([
+        api.listLLMProfiles(),
+        loadMaxSourcesPreference(),
+        api.listMCPServers(),
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      if (profileResult.status === "fulfilled") {
+        setProfiles(profileResult.value);
+        setSelectedProfileId((currentId) =>
+          resolveSelectedProfileId(profileResult.value, {
+            currentId,
+          }),
+        );
+      } else {
+        setSettingsLoadErrors((current) => ({
+          ...current,
+          profiles: profileResult.reason instanceof Error ? profileResult.reason.message : "Failed to load profiles.",
+        }));
+      }
+
+      if (sourceLimitResult.status === "fulfilled") {
+        setMaxSources(sourceLimitResult.value);
+      } else {
+        setSettingsLoadErrors((current) => ({
+          ...current,
+          maxSources:
+            sourceLimitResult.reason instanceof Error ? sourceLimitResult.reason.message : "Failed to load source limit.",
+        }));
+      }
+
+      if (serverResult.status === "fulfilled") {
+        setServers(serverResult.value);
+      } else {
+        setSettingsLoadErrors((current) => ({
+          ...current,
+          servers: serverResult.reason instanceof Error ? serverResult.reason.message : "Failed to load MCP servers.",
+        }));
+      }
+    }
+
+    void loadSettingsState();
 
     return () => {
       cancelled = true;
@@ -492,10 +537,14 @@ export default function App() {
     is_default?: boolean;
   }) {
     const created = await api.createLLMProfile(payload);
-    await refreshProfiles({
-      preferredId: payload.is_default ? created.id : null,
-      keepCurrent: !payload.is_default,
+    setProfiles((current) => {
+      const remainingProfiles = current
+        .filter((profile) => profile.id !== created.id)
+        .map((profile) => (created.is_default ? { ...profile, is_default: false } : profile));
+      return [created, ...remainingProfiles];
     });
+    setSelectedProfileId(created.id);
+    setSettingsLoadErrors((current) => ({ ...current, profiles: null }));
   }
 
   async function handleTestProfile(profileId: number) {
@@ -505,11 +554,13 @@ export default function App() {
   async function handleSaveMaxSources(value: number) {
     const saved = await api.setPreference("max_sources", value);
     setMaxSources(readMaxSourcesPreference(saved) ?? value);
+    setSettingsLoadErrors((current) => ({ ...current, maxSources: null }));
   }
 
   async function handleCreateServer(payload: Omit<MCPServer, "id">) {
-    await api.createMCPServer(payload);
-    await refreshServers();
+    const created = await api.createMCPServer(payload);
+    setServers((current) => [created, ...current.filter((server) => server.id !== created.id)]);
+    setSettingsLoadErrors((current) => ({ ...current, servers: null }));
   }
 
   const backendDefaultProfile = profiles.find((profile) => profile.is_default) ?? null;
@@ -539,6 +590,7 @@ export default function App() {
             onTestProfile={handleTestProfile}
             onSaveMaxSources={handleSaveMaxSources}
             onCreateServer={handleCreateServer}
+            loadErrors={settingsLoadErrors}
           />
         ) : (
           <div className="flex h-full flex-col">

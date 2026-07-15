@@ -104,4 +104,42 @@ describe("api client", () => {
     expect(result).not.toHaveProperty("api_key_masked");
     expect(hasMaskedApiKeyField).toBe(false);
   });
+
+  it("sends HTTP MCP server payloads with null command and args", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 5,
+        name: "remote-tools",
+        transport: "http",
+        command: null,
+        args: null,
+        env: null,
+        url: "http://localhost:9000/mcp",
+        enabled: true,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const payload = {
+      name: "remote-tools",
+      transport: "http",
+      command: null,
+      args: null,
+      env: null,
+      url: "http://localhost:9000/mcp",
+      enabled: true,
+    };
+
+    const result = await api.createMCPServer(payload);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/mcp/servers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(result.command).toBeNull();
+    expect(result.args).toBeNull();
+    expect(result.url).toBe("http://localhost:9000/mcp");
+  });
 });
