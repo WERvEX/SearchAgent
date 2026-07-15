@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { subscribeToEvents } from "../api/events";
-import type { ResearchProgressEvent } from "../api/types";
+import type { ResearchLifecycleEvent } from "../api/types";
 
 type EventStreamOptions = {
   threadId: string | null;
@@ -10,7 +10,7 @@ type EventStreamOptions = {
 
 export function useEventStream({ threadId, replayLimit = 100, displayLimit = 50 }: EventStreamOptions) {
   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
-  const [events, setEvents] = useState<ResearchProgressEvent[]>([]);
+  const [events, setEvents] = useState<ResearchLifecycleEvent[]>([]);
 
   useEffect(() => {
     setEvents([]);

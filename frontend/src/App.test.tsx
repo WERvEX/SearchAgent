@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -38,9 +38,29 @@ const profile = {
   is_default: true,
 };
 
+class MockEventSource {
+  static instance: MockEventSource | null = null;
+
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly listeners = new Map<string, (message: MessageEvent<string>) => void>();
+
+  constructor(public readonly url: string) {
+    MockEventSource.instance = this;
+  }
+
+  addEventListener(type: string, listener: (message: MessageEvent<string>) => void) {
+    this.listeners.set(type, listener);
+  }
+
+  close() {}
+}
+
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    MockEventSource.instance = null;
+    vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
     vi.mocked(api.listConversations).mockResolvedValue([conversation]);
     vi.mocked(api.listLLMProfiles).mockResolvedValue([profile]);
     vi.mocked(api.getConversation).mockResolvedValue(conversationDetail);
@@ -138,5 +158,37 @@ describe("App", () => {
 
     await waitFor(() => expect(api.getReport).toHaveBeenCalledWith(12));
     expect(await screen.findByRole("heading", { name: "Completed report" })).toBeInTheDocument();
+  });
+
+  it("renders the backend research.plan_ready SSE contract for the active run", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: {},
+      interrupted: false,
+      interrupt_payload: null,
+    });
+
+    render(<App />);
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100"));
+    act(() => {
+      MockEventSource.instance?.listeners.get("research.plan_ready")?.({
+        data: JSON.stringify({
+          thread_id: "thread-1",
+          conversation_id: 4,
+          project_id: 9,
+          option_count: 2,
+        }),
+        lastEventId: "42",
+      } as MessageEvent<string>);
+    });
+
+    expect(await screen.findByText("research.plan_ready")).toBeInTheDocument();
+    expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
   });
 });

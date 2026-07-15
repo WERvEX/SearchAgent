@@ -80,22 +80,27 @@ export type ReportRead = {
   created_at: string;
 };
 
-export type ResearchProgressPayload = {
-  schema_version: number;
-  kind: "research.progress";
-  occurred_at: string;
+export const RESEARCH_LIFECYCLE_EVENT_TYPES = [
+  "research.started",
+  "research.plan_ready",
+  "research.awaiting_approval",
+  "research.resumed",
+  "research.sources_collected",
+  "research.report_ready",
+  "research.completed",
+  "research.failed",
+] as const;
+
+export type ResearchLifecycleEventType = (typeof RESEARCH_LIFECYCLE_EVENT_TYPES)[number];
+
+export type ResearchLifecyclePayload = Record<string, unknown> & {
   thread_id: string;
-  conversation_id: number;
-  project_id: number;
-  phase: string;
-  message: string;
-  data: Record<string, unknown>;
 };
 
-export type ResearchProgressEvent = {
+export type ResearchLifecycleEvent = {
   id: string;
-  event: "research.progress";
-  data: ResearchProgressPayload;
+  event: ResearchLifecycleEventType;
+  data: ResearchLifecyclePayload;
 };
 
 export type UnknownServerEvent = {
@@ -104,4 +109,4 @@ export type UnknownServerEvent = {
   data: unknown;
 };
 
-export type ServerEvent = ResearchProgressEvent | UnknownServerEvent;
+export type ServerEvent = ResearchLifecycleEvent | UnknownServerEvent;

@@ -50,6 +50,7 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
 
 def _publish_lifecycle(event_type: str, *, thread_id: str, state: dict, **details: Any) -> None:
     metadata = {
+        "thread_id": thread_id,
         "run_id": state.get("run_id") or thread_id,
         "conversation_id": state.get("conversation_id"),
         "project_id": state.get("project_id"),

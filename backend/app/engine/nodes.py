@@ -263,12 +263,19 @@ def make_nodes(ctx: EngineContext):
     """Return a dict of node-name -> callable for the research graph."""
 
     def publish_progress(event_type: str, state: ResearchState, **details: Any) -> None:
+        run_id = state.get("run_id")
         metadata = {
-            key: state[key]
-            for key in ("run_id", "conversation_id", "project_id")
-            if state.get(key) is not None
+            "thread_id": run_id,
+            "run_id": run_id,
+            "conversation_id": state.get("conversation_id"),
+            "project_id": state.get("project_id"),
         }
-        get_event_bus().publish({"type": event_type, "data": {**metadata, **details}})
+        get_event_bus().publish(
+            {
+                "type": event_type,
+                "data": {key: value for key, value in {**metadata, **details}.items() if value is not None},
+            }
+        )
 
     def clarify_intent(state: ResearchState) -> dict:
         if state.get("objective"):

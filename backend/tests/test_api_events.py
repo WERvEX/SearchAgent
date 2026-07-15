@@ -55,3 +55,19 @@ def test_event_bus_replays_only_events_after_last_event_id_and_stays_live(app_ho
 
     third = bus.publish({"type": "research.completed", "data": {"run_id": "run-1"}})
     assert next(subscriber) == third
+
+
+def test_event_bus_filters_replay_and_live_events_by_thread_id(app_home):
+    from app.core.events import EventBus
+
+    bus = EventBus(history_size=10)
+    ignored = bus.publish({"type": "research.started", "data": {"thread_id": "other-thread"}})
+    matching = bus.publish({"type": "research.plan_ready", "data": {"thread_id": "thread-1"}})
+
+    subscriber = bus.subscribe(event_filter=lambda event: event["data"].get("thread_id") == "thread-1")
+    assert next(subscriber) == matching
+
+    bus.publish({"type": "research.completed", "data": {"thread_id": "other-thread"}})
+    live = bus.publish({"type": "research.completed", "data": {"thread_id": "thread-1"}})
+    assert next(subscriber) == live
+    assert ignored["id"] < matching["id"] < live["id"]

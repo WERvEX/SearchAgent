@@ -10,33 +10,27 @@ describe("ProgressStream", () => {
     expect(screen.getByText("No events yet")).toBeInTheDocument();
   });
 
-  it("renders concise typed progress details", () => {
+  it("renders a real research lifecycle event", () => {
     render(
       <ProgressStream
         status="open"
         events={[
           {
             id: "event-1",
-            event: "research.progress",
+            event: "research.plan_ready",
             data: {
-              schema_version: 1,
-              kind: "research.progress",
-              occurred_at: "2026-07-15T10:30:00Z",
               thread_id: "thread-1",
               conversation_id: 4,
               project_id: 7,
-              phase: "writing",
-              message: "Drafting report",
-              data: { section: "summary" },
+              option_count: 2,
             },
           },
         ]}
       />,
     );
 
-    expect(screen.getByText("writing")).toBeInTheDocument();
-    expect(screen.getByText("Drafting report")).toBeInTheDocument();
-    expect(screen.queryByText(/schema_version/)).not.toBeInTheDocument();
+    expect(screen.getByText("research.plan_ready")).toBeInTheDocument();
+    expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
   });
 
   it("falls back to a readable representation for unknown events", () => {

@@ -24,7 +24,7 @@ class MockEventSource {
 }
 
 describe("useEventStream", () => {
-  it("keeps distinct active-run progress events within the local display count", async () => {
+  it("keeps distinct active-run lifecycle events within the local display count", async () => {
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
 
     const { result, unmount } = renderHook(() => useEventStream({ threadId: "thread-1", replayLimit: 100, displayLimit: 2 }));
@@ -34,59 +34,36 @@ describe("useEventStream", () => {
 
     act(() => {
       MockEventSource.instance?.onopen?.();
-      MockEventSource.instance?.listeners.get("research.progress")?.({
+      MockEventSource.instance?.listeners.get("research.started")?.({
         data: JSON.stringify({
-          schema_version: 1,
-          kind: "research.progress",
-          occurred_at: "2026-07-15T10:30:00Z",
           thread_id: "thread-1",
           conversation_id: 1,
           project_id: 2,
-          phase: "search",
-          message: "First",
-          data: {},
         }),
         lastEventId: "evt-1",
       } as MessageEvent<string>);
-      MockEventSource.instance?.listeners.get("research.progress")?.({
+      MockEventSource.instance?.listeners.get("research.plan_ready")?.({
         data: JSON.stringify({
-          schema_version: 1,
-          kind: "research.progress",
-          occurred_at: "2026-07-15T10:31:00Z",
           thread_id: "another-thread",
           conversation_id: 1,
           project_id: 2,
-          phase: "search",
-          message: "Ignored",
-          data: {},
+          option_count: 3,
         }),
         lastEventId: "evt-2",
       } as MessageEvent<string>);
-      MockEventSource.instance?.listeners.get("research.progress")?.({
+      MockEventSource.instance?.listeners.get("research.completed")?.({
         data: JSON.stringify({
-          schema_version: 1,
-          kind: "research.progress",
-          occurred_at: "2026-07-15T10:32:00Z",
           thread_id: "thread-1",
           conversation_id: 1,
           project_id: 2,
-          phase: "write",
-          message: "Second",
-          data: {},
         }),
         lastEventId: "evt-3",
       } as MessageEvent<string>);
-      MockEventSource.instance?.listeners.get("research.progress")?.({
+      MockEventSource.instance?.listeners.get("research.completed")?.({
         data: JSON.stringify({
-          schema_version: 1,
-          kind: "research.progress",
-          occurred_at: "2026-07-15T10:32:00Z",
           thread_id: "thread-1",
           conversation_id: 1,
           project_id: 2,
-          phase: "write",
-          message: "Second replay",
-          data: {},
         }),
         lastEventId: "evt-3",
       } as MessageEvent<string>);
@@ -94,8 +71,8 @@ describe("useEventStream", () => {
 
     await waitFor(() => expect(result.current.status).toBe("open"));
     expect(result.current.events).toEqual([
-      expect.objectContaining({ id: "evt-3", data: expect.objectContaining({ message: "Second" }) }),
-      expect.objectContaining({ id: "evt-1", data: expect.objectContaining({ message: "First" }) }),
+      expect.objectContaining({ id: "evt-3", event: "research.completed" }),
+      expect.objectContaining({ id: "evt-1", event: "research.started" }),
     ]);
 
     unmount();

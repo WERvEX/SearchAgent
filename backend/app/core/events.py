@@ -2,7 +2,7 @@ import json
 import queue
 import threading
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 
@@ -39,13 +39,15 @@ class EventBus:
         *,
         last_event_id: str | None = None,
         replay_limit: int | None = None,
+        event_filter: Callable[[dict[str, Any]], bool] | None = None,
     ) -> Iterator[dict[str, Any]]:
         subscriber: queue.Queue[dict[str, Any]] = queue.Queue()
         with self._lock:
             history = [
                 event
                 for event in self._history
-                if last_event_id is None or _is_after(event["id"], last_event_id)
+                if (last_event_id is None or _is_after(event["id"], last_event_id))
+                and (event_filter is None or event_filter(event))
             ]
             if replay_limit is not None:
                 history = history[-max(0, replay_limit):]
@@ -53,7 +55,9 @@ class EventBus:
         try:
             yield from history
             while True:
-                yield subscriber.get()
+                event = subscriber.get()
+                if event_filter is None or event_filter(event):
+                    yield event
         finally:
             with self._lock:
                 self._subscribers.discard(subscriber)

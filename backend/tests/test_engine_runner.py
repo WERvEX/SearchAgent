@@ -102,4 +102,5 @@ def test_start_and_resume_research_runs_to_report_and_publishes_lifecycle_events
         "research.report_ready",
         "research.completed",
     ]
+    assert all(event["data"]["thread_id"] == started["thread_id"] for event in events)
     assert events[-2]["data"]["report_id"] == resumed["state"]["report_id"]
