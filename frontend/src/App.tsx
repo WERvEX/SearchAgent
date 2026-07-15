@@ -90,12 +90,13 @@ export default function App() {
 
   const plan = useMemo(() => {
     const payload = currentRun?.interrupt_payload;
-    if (!payload) {
+    const rawPlan = payload?.plan;
+    if (!rawPlan || typeof rawPlan !== "object") {
       return null;
     }
 
-    const summary = typeof payload.summary === "string" ? payload.summary : undefined;
-    const rawOptions = Array.isArray(payload.options) ? payload.options : [];
+    const summary = "summary" in rawPlan && typeof rawPlan.summary === "string" ? rawPlan.summary : undefined;
+    const rawOptions = "options" in rawPlan && Array.isArray(rawPlan.options) ? rawPlan.options : [];
     const options = rawOptions
       .map((option) => {
         if (!option || typeof option !== "object") {
@@ -103,11 +104,9 @@ export default function App() {
         }
 
         const id = "id" in option && typeof option.id === "string" ? option.id : null;
-        const title = "title" in option && typeof option.title === "string" ? option.title : null;
-        const description =
-          "description" in option && typeof option.description === "string" ? option.description : undefined;
+        const title = "label" in option && typeof option.label === "string" ? option.label : null;
 
-        return id && title ? { id, title, description } : null;
+        return id && title ? { id, title } : null;
       })
       .filter((option): option is NonNullable<typeof option> => option !== null);
 
@@ -134,7 +133,7 @@ export default function App() {
   }
 
   async function handleStartResearch(message: string) {
-    if (!activeConversation || !selectedProfileId) {
+    if (!activeConversation || !selectedProfileId || currentRun?.interrupted) {
       return;
     }
 
