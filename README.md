@@ -125,21 +125,12 @@ SearchAgent/
 │   │   ├── services/  # 设置和报告导出
 │   │   └── tools/     # MCP 客户端与网页抓取
 │   └── tests/
-├── frontend/
-│   └── src/
-│       ├── api/        # REST/SSE 客户端
-│       ├── components/ # 研究、计划、报告和设置界面
-│       └── i18n/       # 中英文资源与语言状态
-└── docs/superpowers/
-    ├── specs/          # 产品与技术规格
-    └── plans/          # 分阶段实现计划
+└── frontend/
+    └── src/
+        ├── api/        # REST/SSE 客户端
+        ├── components/ # 研究、计划、报告和设置界面
+        └── i18n/       # 中英文资源与语言状态
 ```
-
-## 设计文档
-
-- [总体设计](docs/superpowers/specs/2026-07-06-langchain-mcp-research-agent-design.md)
-- [前端本地化设计](docs/superpowers/specs/2026-07-16-frontend-localization-design.md)
-- [分阶段实现计划](docs/superpowers/plans/)
 
 ## 当前限制
 

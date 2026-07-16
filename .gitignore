@@ -5,6 +5,7 @@
 .superpowers/
 .review-tmp/
 docs/HANDOVER.md
+docs/superpowers/
 
 # Local environment and editor settings
 .env
