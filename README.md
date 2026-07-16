@@ -137,3 +137,9 @@ SearchAgent/
 - 仅面向单用户、本地运行，不包含账号、权限和云端部署能力。
 - 研究质量与可用工具取决于 LLM 及 MCP 服务配置。
 - PDF 导出依赖本机安装的 Playwright Chromium。
+
+## 许可证
+
+本项目基于 [Apache License 2.0](LICENSE) 开源。
+
+Copyright 2026 WERvEX
