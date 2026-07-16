@@ -120,6 +120,161 @@ describe("App", () => {
     expect(await screen.findByText("准备开始研究。")).toBeInTheDocument();
   });
 
+  it("uses the stable Untitled fallback when creating a conversation in Chinese", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listConversations).mockResolvedValue([]);
+    vi.mocked(api.createConversation).mockResolvedValue({
+      id: 7,
+      title: "Untitled",
+      status: "idle",
+      created_at: "",
+      updated_at: "",
+    });
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Create a conversation to begin.");
+    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
+    await user.click(screen.getByRole("button", { name: "新建" }));
+
+    expect(api.createConversation).toHaveBeenCalledWith("Untitled");
+  });
+
+  it("preserves an active run without refetching data when the locale changes", async () => {
+    const user = userEvent.setup();
+    let resolveStart!: (run: { thread_id: string; state: {}; interrupted: false; interrupt_payload: null }) => void;
+    vi.mocked(api.startResearch).mockImplementation(
+      () => new Promise((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    act(() => {
+      MockEventSource.instance?.listeners.get("research.started")?.({
+        data: JSON.stringify({ thread_id: "thread-1", conversation_id: 4, project_id: 9 }),
+        lastEventId: "evt-locale-active",
+      } as MessageEvent<string>);
+    });
+    expect(await screen.findByText("Research in progress.")).toBeInTheDocument();
+    const calls = {
+      conversations: vi.mocked(api.listConversations).mock.calls.length,
+      profiles: vi.mocked(api.listLLMProfiles).mock.calls.length,
+      servers: vi.mocked(api.listMCPServers).mock.calls.length,
+      preference: vi.mocked(api.getPreference).mock.calls.length,
+      conversation: vi.mocked(api.getConversation).mock.calls.length,
+    };
+
+    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
+
+    expect(screen.getByText("研究进行中。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始" })).toBeDisabled();
+    expect(vi.mocked(api.listConversations)).toHaveBeenCalledTimes(calls.conversations);
+    expect(vi.mocked(api.listLLMProfiles)).toHaveBeenCalledTimes(calls.profiles);
+    expect(vi.mocked(api.listMCPServers)).toHaveBeenCalledTimes(calls.servers);
+    expect(vi.mocked(api.getPreference)).toHaveBeenCalledTimes(calls.preference);
+    expect(vi.mocked(api.getConversation)).toHaveBeenCalledTimes(calls.conversation);
+
+    await act(async () => resolveStart({ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null }));
+  });
+
+  it("preserves awaiting approval across a locale change", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: {},
+      interrupted: true,
+      interrupt_payload: { plan: { summary: "Backend plan", options: [{ id: "A", label: "Backend option" }] } },
+    });
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByText("Backend plan");
+    const getConversationCalls = vi.mocked(api.getConversation).mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
+
+    expect(screen.getByText("需要确认计划。")).toBeInTheDocument();
+    expect(screen.getByText("Backend plan")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "批准计划" })).toBeEnabled();
+    expect(vi.mocked(api.getConversation)).toHaveBeenCalledTimes(getConversationCalls);
+  });
+
+  it("preserves a completed run and loaded report across a locale change", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startResearch).mockResolvedValue({
+      thread_id: "thread-1",
+      state: { report_id: 12 },
+      interrupted: false,
+      interrupt_payload: null,
+    });
+    vi.mocked(api.getReport).mockResolvedValue(completedReport);
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Search API evaluation");
+    await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByRole("heading", { name: "Completed report" });
+    const calls = {
+      conversation: vi.mocked(api.getConversation).mock.calls.length,
+      report: vi.mocked(api.getReport).mock.calls.length,
+    };
+
+    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
+
+    expect(screen.getByText("研究已完成。")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Completed report" })).toBeInTheDocument();
+    expect(vi.mocked(api.getConversation)).toHaveBeenCalledTimes(calls.conversation);
+    expect(vi.mocked(api.getReport)).toHaveBeenCalledTimes(calls.report);
+  });
+
+  it("localizes frontend API and settings fallbacks while preserving structured errors", async () => {
+    const user = userEvent.setup();
+    const apiFallback = Object.assign(new Error(""), { status: 503, detail: null });
+    vi.mocked(api.listConversations).mockRejectedValue(apiFallback);
+    vi.mocked(api.listLLMProfiles).mockRejectedValue("profiles failed");
+    vi.mocked(api.listMCPServers).mockRejectedValue("servers failed");
+    vi.mocked(api.getPreference).mockRejectedValue("preference failed");
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Request failed with status 503.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(await screen.findByText("Failed to load profiles.")).toBeInTheDocument();
+    expect(screen.getByText("Failed to load source limit.")).toBeInTheDocument();
+    expect(screen.getByText("Failed to load MCP servers.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
+
+    expect(screen.getByText("请求失败，状态码 503。")).toBeInTheDocument();
+    expect(screen.getByText("加载配置失败。")).toBeInTheDocument();
+    expect(screen.getByText("加载来源限制失败。")).toBeInTheDocument();
+    expect(screen.getByText("加载 MCP 服务器失败。")).toBeInTheDocument();
+  });
+
   it("maps the backend interrupted plan payload and submits the selected approval", async () => {
     const user = userEvent.setup();
     vi.mocked(api.startResearch).mockResolvedValue({

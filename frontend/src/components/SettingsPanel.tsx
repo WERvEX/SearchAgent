@@ -2,18 +2,27 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, PlugZap, Save } from "lucide-react";
 import type { LLMProfileCreate, LLMProfileRead, MCPServer } from "../api/types";
 import { useI18n } from "../i18n/I18nProvider";
-import type { Translate } from "../i18n/messages";
+import {
+  localizedMessage,
+  messageFromError,
+  rawMessage,
+  renderLocalizedMessage,
+  type LocalizedMessage,
+  type MessageKey,
+} from "../i18n/messages";
+
+export type SettingsLoadErrors = {
+  profiles: LocalizedMessage | null;
+  maxSources: LocalizedMessage | null;
+  servers: LocalizedMessage | null;
+};
 
 type SettingsPanelProps = {
   profiles: LLMProfileRead[];
   selectedProfileId: number | null;
   servers: MCPServer[];
   maxSources: number;
-  loadErrors?: {
-    profiles: string | null;
-    maxSources: string | null;
-    servers: string | null;
-  };
+  loadErrors?: SettingsLoadErrors;
   onSelectProfile: (profileId: number) => void;
   onCreateProfile: (payload: LLMProfileCreate) => Promise<void> | void;
   onTestProfile: (profileId: number) => Promise<{ ok: boolean; error: string | null }>;
@@ -23,14 +32,16 @@ type SettingsPanelProps = {
 
 type Feedback = {
   tone: "success" | "error";
-  message: string;
+  message: LocalizedMessage;
 };
+
+type ParseResult<T> = { value: T; error: MessageKey | null };
 
 function feedbackClassName(tone: Feedback["tone"]) {
   return tone === "error" ? "text-red-600" : "text-emerald-700";
 }
 
-function parseObjectJson(value: string, t: Translate) {
+function parseObjectJson(value: string): ParseResult<Record<string, unknown> | null> {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
     return { value: null as Record<string, unknown> | null, error: null };
@@ -39,11 +50,11 @@ function parseObjectJson(value: string, t: Translate) {
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { value: null, error: t("validation.paramsObject") };
+      return { value: null, error: "validation.paramsObject" };
     }
     return { value: parsed as Record<string, unknown>, error: null };
   } catch {
-    return { value: null, error: t("validation.paramsJson") };
+    return { value: null, error: "validation.paramsJson" };
   }
 }
 
@@ -54,19 +65,19 @@ function parseLines(value: string) {
     .filter((line) => line.length > 0);
 }
 
-function parseEnvText(value: string, t: Translate) {
+function parseEnvText(value: string): ParseResult<Record<string, string> | null> {
   const env: Record<string, string> = {};
 
   for (const line of parseLines(value)) {
     const separatorIndex = line.indexOf("=");
     if (separatorIndex <= 0) {
-      return { value: null as Record<string, string> | null, error: t("validation.envFormat") };
+      return { value: null, error: "validation.envFormat" };
     }
 
     const key = line.slice(0, separatorIndex).trim();
     const rawValue = line.slice(separatorIndex + 1);
     if (key.length === 0) {
-      return { value: null, error: t("validation.envKey") };
+      return { value: null, error: "validation.envKey" };
     }
 
     env[key] = rawValue;
@@ -75,14 +86,14 @@ function parseEnvText(value: string, t: Translate) {
   return { value: Object.keys(env).length > 0 ? env : null, error: null };
 }
 
-function parseMaxSources(value: string, t: Translate) {
+function parseMaxSources(value: string): ParseResult<number | null> {
   if (value.trim().length === 0) {
-    return { value: null as number | null, error: t("validation.maxSources") };
+    return { value: null, error: "validation.maxSources" };
   }
 
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
-    return { value: null, error: t("validation.maxSources") };
+    return { value: null, error: "validation.maxSources" };
   }
 
   return { value: parsed, error: null };
@@ -138,26 +149,26 @@ export function SettingsPanel({
     }
   }, [profiles.length]);
 
-  const profileParams = useMemo(() => parseObjectJson(profileForm.paramsJson, t), [profileForm.paramsJson, t]);
-  const serverEnv = useMemo(() => parseEnvText(serverForm.envText, t), [serverForm.envText, t]);
-  const maxSourcesState = useMemo(() => parseMaxSources(maxSourcesInput, t), [maxSourcesInput, t]);
+  const profileParams = useMemo(() => parseObjectJson(profileForm.paramsJson), [profileForm.paramsJson]);
+  const serverEnv = useMemo(() => parseEnvText(serverForm.envText), [serverForm.envText]);
+  const maxSourcesState = useMemo(() => parseMaxSources(maxSourcesInput), [maxSourcesInput]);
 
   const profileValidation =
     profileForm.name.trim().length === 0
-      ? t("validation.profileName")
+      ? "validation.profileName"
       : profileForm.provider.trim().length === 0
-        ? t("validation.provider")
+        ? "validation.provider"
         : profileForm.model.trim().length === 0
-          ? t("validation.model")
+          ? "validation.model"
           : profileParams.error;
 
   const serverValidation =
     serverForm.name.trim().length === 0
-      ? t("validation.serverName")
+      ? "validation.serverName"
       : serverForm.transport === "stdio" && serverForm.command.trim().length === 0
-        ? t("validation.command")
+        ? "validation.command"
         : serverForm.transport !== "stdio" && serverForm.url.trim().length === 0
-          ? t("validation.url")
+          ? "validation.url"
           : serverEnv.error;
 
   const canSubmitProfile = !profileSubmitting && profileValidation === null;
@@ -171,7 +182,7 @@ export function SettingsPanel({
     setProfileTestFeedback(null);
 
     if (profileValidation !== null) {
-      setProfileFeedback({ tone: "error", message: profileValidation });
+      setProfileFeedback({ tone: "error", message: localizedMessage(profileValidation) });
       return;
     }
 
@@ -186,7 +197,7 @@ export function SettingsPanel({
         params: profileParams.value,
         is_default: profiles.length === 0 ? true : profileForm.is_default,
       });
-      setProfileFeedback({ tone: "success", message: t("feedback.profileSaved") });
+      setProfileFeedback({ tone: "success", message: localizedMessage("feedback.profileSaved") });
       setProfileForm({
         name: "",
         provider: "openai",
@@ -199,7 +210,7 @@ export function SettingsPanel({
     } catch (error) {
       setProfileFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : t("feedback.failedSaveProfile"),
+        message: messageFromError(error, "feedback.failedSaveProfile"),
       });
     } finally {
       setProfileSubmitting(false);
@@ -212,11 +223,18 @@ export function SettingsPanel({
     setProfileTestingId(profileId);
     try {
       const result = await onTestProfile(profileId);
-      setProfileTestFeedback(result.ok ? { tone: "success", message: t("feedback.connectionOk") } : { tone: "error", message: result.error ?? t("feedback.connectionFailed") });
+      setProfileTestFeedback(
+        result.ok
+          ? { tone: "success", message: localizedMessage("feedback.connectionOk") }
+          : {
+              tone: "error",
+              message: result.error ? rawMessage(result.error) : localizedMessage("feedback.connectionFailed"),
+            },
+      );
     } catch (error) {
       setProfileTestFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : t("feedback.failedTestProfile"),
+        message: messageFromError(error, "feedback.failedTestProfile"),
       });
     } finally {
       setProfileTestingId(null);
@@ -228,18 +246,18 @@ export function SettingsPanel({
     setMaxSourcesFeedback(null);
 
     if (maxSourcesState.error !== null || maxSourcesState.value === null) {
-      setMaxSourcesFeedback({ tone: "error", message: t("validation.maxSources") });
+      setMaxSourcesFeedback({ tone: "error", message: localizedMessage("validation.maxSources") });
       return;
     }
 
     setMaxSourcesSubmitting(true);
     try {
       await onSaveMaxSources(maxSourcesState.value);
-      setMaxSourcesFeedback({ tone: "success", message: t("feedback.sourceLimitSaved") });
+      setMaxSourcesFeedback({ tone: "success", message: localizedMessage("feedback.sourceLimitSaved") });
     } catch (error) {
       setMaxSourcesFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : t("feedback.failedSaveSourceLimit"),
+        message: messageFromError(error, "feedback.failedSaveSourceLimit"),
       });
     } finally {
       setMaxSourcesSubmitting(false);
@@ -251,7 +269,7 @@ export function SettingsPanel({
     setServerFeedback(null);
 
     if (serverValidation !== null) {
-      setServerFeedback({ tone: "error", message: serverValidation });
+      setServerFeedback({ tone: "error", message: localizedMessage(serverValidation) });
       return;
     }
 
@@ -267,7 +285,7 @@ export function SettingsPanel({
         url: serverForm.transport === "stdio" ? null : serverForm.url.trim(),
         enabled: true,
       });
-      setServerFeedback({ tone: "success", message: t("feedback.serverSaved") });
+      setServerFeedback({ tone: "success", message: localizedMessage("feedback.serverSaved") });
       setServerForm({
         name: "",
         transport: "stdio",
@@ -279,7 +297,7 @@ export function SettingsPanel({
     } catch (error) {
       setServerFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : t("feedback.failedSaveServer"),
+        message: messageFromError(error, "feedback.failedSaveServer"),
       });
     } finally {
       setServerSubmitting(false);
@@ -378,13 +396,13 @@ export function SettingsPanel({
 
             {profileFeedback ? (
               <p role={profileFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(profileFeedback.tone)}`}>
-                {profileFeedback.message}
+                {renderLocalizedMessage(t, profileFeedback.message)}
               </p>
             ) : null}
-            {loadErrors?.profiles ? <p role="alert" className="text-sm text-red-600">{loadErrors.profiles}</p> : null}
+            {loadErrors?.profiles ? <p role="alert" className="text-sm text-red-600">{renderLocalizedMessage(t, loadErrors.profiles)}</p> : null}
             {profileTestFeedback ? (
               <p role={profileTestFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(profileTestFeedback.tone)}`}>
-                {profileTestFeedback.message}
+                {renderLocalizedMessage(t, profileTestFeedback.message)}
               </p>
             ) : null}
 
@@ -393,7 +411,7 @@ export function SettingsPanel({
                 <Save className="h-4 w-4" aria-hidden="true" />
                 {profileSubmitting ? t("settings.saving") : t("settings.saveProfile")}
               </button>
-              {profileValidation ? <span className="text-xs text-zinc-500">{profileValidation}</span> : null}
+              {profileValidation ? <span className="text-xs text-zinc-500">{t(profileValidation)}</span> : null}
             </div>
           </form>
 
@@ -472,11 +490,11 @@ export function SettingsPanel({
               />
             </label>
 
-            {maxSourcesState.error ? <p className="text-sm text-red-600">{maxSourcesState.error}</p> : null}
-            {loadErrors?.maxSources ? <p role="alert" className="text-sm text-red-600">{loadErrors.maxSources}</p> : null}
+            {maxSourcesState.error ? <p className="text-sm text-red-600">{t(maxSourcesState.error)}</p> : null}
+            {loadErrors?.maxSources ? <p role="alert" className="text-sm text-red-600">{renderLocalizedMessage(t, loadErrors.maxSources)}</p> : null}
             {maxSourcesFeedback ? (
               <p role={maxSourcesFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(maxSourcesFeedback.tone)}`}>
-                {maxSourcesFeedback.message}
+                {renderLocalizedMessage(t, maxSourcesFeedback.message)}
               </p>
             ) : null}
 
@@ -560,11 +578,11 @@ export function SettingsPanel({
               </label>
             </div>
 
-            {serverValidation ? <p className="text-sm text-zinc-500">{serverValidation}</p> : null}
-            {loadErrors?.servers ? <p role="alert" className="text-sm text-red-600">{loadErrors.servers}</p> : null}
+            {serverValidation ? <p className="text-sm text-zinc-500">{t(serverValidation)}</p> : null}
+            {loadErrors?.servers ? <p role="alert" className="text-sm text-red-600">{renderLocalizedMessage(t, loadErrors.servers)}</p> : null}
             {serverFeedback ? (
               <p role={serverFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(serverFeedback.tone)}`}>
-                {serverFeedback.message}
+                {renderLocalizedMessage(t, serverFeedback.message)}
               </p>
             ) : null}
 

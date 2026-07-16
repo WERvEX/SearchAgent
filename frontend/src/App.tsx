@@ -17,10 +17,18 @@ import { PlanPanel, type ResearchPlan } from "./components/PlanPanel";
 import { ProgressStream } from "./components/ProgressStream";
 import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsPanel, type SettingsLoadErrors } from "./components/SettingsPanel";
 import { useEventStream } from "./hooks/useEventStream";
 import { useI18n } from "./i18n/I18nProvider";
-import type { MessageKey } from "./i18n/messages";
+import {
+  messageFromError,
+  rawMessage,
+  renderLocalizedMessage,
+  type LocalizedMessage,
+  type MessageKey,
+} from "./i18n/messages";
+
+const DEFAULT_CONVERSATION_TITLE = "Untitled";
 
 function createPlaceholderRun(threadId: string): ResearchRunResponse {
   return {
@@ -60,36 +68,24 @@ function readMaxSourcesPreference(preference: PreferenceRead) {
   return typeof preference.value.value === "number" ? preference.value.value : null;
 }
 
-type SettingsLoadErrors = {
-  profiles: string | null;
-  maxSources: string | null;
-  servers: string | null;
-};
-
 function getErrorStatus(error: unknown) {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
     ? error.status
     : null;
 }
 
+const phaseMessageKeys = {
+  idle: "phase.idle",
+  starting: "phase.starting",
+  active: "phase.active",
+  awaiting_approval: "phase.awaiting_approval",
+  resuming: "phase.resuming",
+  completed: "phase.completed",
+  failed: "phase.failed",
+} satisfies Record<ResearchRunPhase, MessageKey>;
+
 function statusMessageForPhase(phase: ResearchRunPhase): MessageKey {
-  switch (phase) {
-    case "starting":
-      return "phase.starting";
-    case "active":
-      return "phase.active";
-    case "awaiting_approval":
-      return "phase.awaiting_approval";
-    case "resuming":
-      return "phase.resuming";
-    case "completed":
-      return "phase.completed";
-    case "failed":
-      return "phase.failed";
-    case "idle":
-    default:
-      return "phase.idle";
-  }
+  return phaseMessageKeys[phase];
 }
 
 function mergeLifecycleEventIntoRun(
@@ -137,7 +133,7 @@ export default function App() {
   const [retainedReportId, setRetainedReportId] = useState<number | null>(null);
   const [report, setReport] = useState<ReportRead | null>(null);
   const [statusMessageKey, setStatusMessageKey] = useState<MessageKey>("app.loadingWorkspace");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<LocalizedMessage | null>(null);
   const [runPhase, setRunPhase] = useState<ResearchRunPhase>("idle");
   const runPhaseRef = useRef<ResearchRunPhase>("idle");
   const resumePendingRef = useRef(false);
@@ -181,7 +177,7 @@ export default function App() {
       updateRunPhase("failed");
       setStatusMessageKey(statusMessageForPhase("failed"));
       if (typeof event.data.message === "string") {
-        setErrorMessage(event.data.message);
+        setErrorMessage(rawMessage(event.data.message));
       }
     }
   }, [updateRunPhase]);
@@ -227,7 +223,7 @@ export default function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadWorkspace"));
+          setErrorMessage(messageFromError(error, "app.failedToLoadWorkspace"));
           setStatusMessageKey("app.unableToLoadWorkspace");
         }
       }
@@ -238,7 +234,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadMaxSourcesPreference, t]);
+  }, [loadMaxSourcesPreference]);
 
   useEffect(() => {
     let cancelled = false;
@@ -270,7 +266,7 @@ export default function App() {
       } else {
         setSettingsLoadErrors((current) => ({
           ...current,
-          profiles: profileResult.reason instanceof Error ? profileResult.reason.message : "Failed to load profiles.",
+          profiles: messageFromError(profileResult.reason, "app.failedToLoadProfiles"),
         }));
       }
 
@@ -279,8 +275,7 @@ export default function App() {
       } else {
         setSettingsLoadErrors((current) => ({
           ...current,
-          maxSources:
-            sourceLimitResult.reason instanceof Error ? sourceLimitResult.reason.message : "Failed to load source limit.",
+          maxSources: messageFromError(sourceLimitResult.reason, "app.failedToLoadSourceLimit"),
         }));
       }
 
@@ -289,7 +284,7 @@ export default function App() {
       } else {
         setSettingsLoadErrors((current) => ({
           ...current,
-          servers: serverResult.reason instanceof Error ? serverResult.reason.message : "Failed to load MCP servers.",
+          servers: messageFromError(serverResult.reason, "app.failedToLoadMcpServers"),
         }));
       }
     }
@@ -327,7 +322,7 @@ export default function App() {
         setStatusMessageKey(statusMessageForPhase("idle"));
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadConversation"));
+          setErrorMessage(messageFromError(error, "app.failedToLoadConversation"));
         }
       }
     }
@@ -337,7 +332,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeConversationId, t, updateRunPhase]);
+  }, [activeConversationId, updateRunPhase]);
 
   useEffect(() => {
     if (reportId === null) {
@@ -358,7 +353,7 @@ export default function App() {
       } catch (error) {
         if (!cancelled) {
           setReport(null);
-          setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadReport"));
+          setErrorMessage(messageFromError(error, "app.failedToLoadReport"));
         }
       }
     }
@@ -368,7 +363,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [reportId, t]);
+  }, [reportId]);
 
   const plan = useMemo(() => {
     const payload = currentRun?.interrupt_payload;
@@ -405,12 +400,13 @@ export default function App() {
   async function handleCreateConversation() {
     try {
       setErrorMessage(null);
-      const created = await api.createConversation("Untitled");
+      // This persisted backend value must not vary with the UI locale.
+      const created = await api.createConversation(DEFAULT_CONVERSATION_TITLE);
       setConversations((current) => [created, ...current]);
       setActiveConversationId(created.id);
       setStatusMessageKey("app.conversationCreated");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("app.failedToCreateConversation"));
+      setErrorMessage(messageFromError(error, "app.failedToCreateConversation"));
     }
   }
 
@@ -461,7 +457,7 @@ export default function App() {
           return recoveredPhase;
         });
         setStatusMessageKey(statusMessageForPhase(recoveredPhase));
-        setErrorMessage(error instanceof Error ? error.message : t("app.failedToStartResearch"));
+        setErrorMessage(messageFromError(error, "app.failedToStartResearch"));
       }
   }
 
@@ -510,7 +506,7 @@ export default function App() {
           return recoveredPhase;
         });
         setStatusMessageKey(statusMessageForPhase(recoveredPhase));
-        setErrorMessage(error instanceof Error ? error.message : t("app.failedToResumeResearch"));
+        setErrorMessage(messageFromError(error, "app.failedToResumeResearch"));
       } finally {
       resumePendingRef.current = false;
     }
@@ -526,7 +522,7 @@ export default function App() {
       setReport(await api.getReport(reportId));
       setStatusMessageKey("app.reportLoaded");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadReport"));
+      setErrorMessage(messageFromError(error, "app.failedToLoadReport"));
     }
   }
 
@@ -606,7 +602,7 @@ export default function App() {
               ) : (
                 <div className="mt-1 text-xs text-amber-700">{t("app.noLlmProfile")}</div>
               )}
-              {errorMessage ? <div className="mt-1 text-xs text-red-600">{errorMessage}</div> : null}
+              {errorMessage ? <div className="mt-1 text-xs text-red-600">{renderLocalizedMessage(t, errorMessage)}</div> : null}
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
               <div className={reportId === null ? "h-full" : "min-h-full"}>
@@ -654,7 +650,7 @@ export default function App() {
                 <dd className="mt-1 text-zinc-900">{servers.length}</dd>
               </div>
             </dl>
-            {errorMessage ? <p className="px-4 py-3 text-sm text-red-600">{errorMessage}</p> : null}
+            {errorMessage ? <p className="px-4 py-3 text-sm text-red-600">{renderLocalizedMessage(t, errorMessage)}</p> : null}
           </section>
         ) : (
           <div className="grid h-full grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">

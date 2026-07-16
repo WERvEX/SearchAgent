@@ -14,6 +14,12 @@ export type AppShellProps = {
 
 export function AppShell({ left, main, right, activePanel, onPanelChange }: AppShellProps) {
   const { locale, setLocale, t } = useI18n();
+  const languageButtonClass = (active: boolean) =>
+    `inline-flex h-8 min-w-9 items-center justify-center rounded-md px-2 text-xs font-medium ${
+      active
+        ? "bg-zinc-900 text-white"
+        : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+    }`;
 
   return (
     <div className="app-shell min-h-screen bg-zinc-50 text-zinc-950">
@@ -44,10 +50,10 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
             <Settings className="h-4 w-4" aria-hidden="true" />
             <span>{t("shell.settings")}</span>
           </button>
-          <div className="ml-auto flex h-9 items-center border-l border-zinc-200 pl-1 sm:ml-1" role="group" aria-label={t("shell.primaryNavigation")}>
+          <div className="ml-auto flex h-9 items-center border-l border-zinc-200 pl-1 sm:ml-1" role="group" aria-label={t("shell.languageSelector")}>
             <button
               type="button"
-              className="inline-flex h-8 min-w-9 items-center justify-center rounded-md px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+              className={languageButtonClass(locale === "zh-CN")}
               aria-label={t("shell.switchToChinese")}
               aria-pressed={locale === "zh-CN"}
               onClick={() => setLocale("zh-CN")}
@@ -56,7 +62,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
             </button>
             <button
               type="button"
-              className="inline-flex h-8 min-w-9 items-center justify-center rounded-md px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+              className={languageButtonClass(locale === "en")}
               aria-label={t("shell.switchToEnglish")}
               aria-pressed={locale === "en"}
               onClick={() => setLocale("en")}

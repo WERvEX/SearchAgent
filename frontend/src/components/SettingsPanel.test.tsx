@@ -1,9 +1,93 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { I18nProvider, useI18n } from "../i18n/I18nProvider";
 import { SettingsPanel } from "./SettingsPanel";
 
+function LocaleSwitch() {
+  const { locale, setLocale } = useI18n();
+  return (
+    <button onClick={() => setLocale(locale === "en" ? "zh-CN" : "en")}>
+      {locale === "en" ? "Use Chinese" : "Use English"}
+    </button>
+  );
+}
+
+function renderLocalizedSettings(overrides: Partial<React.ComponentProps<typeof SettingsPanel>> = {}) {
+  localStorage.clear();
+  const props: React.ComponentProps<typeof SettingsPanel> = {
+    profiles: [],
+    selectedProfileId: null,
+    servers: [],
+    maxSources: 8,
+    onSelectProfile: vi.fn(),
+    onCreateProfile: vi.fn().mockResolvedValue(undefined),
+    onTestProfile: vi.fn().mockResolvedValue({ ok: true, error: null }),
+    onSaveMaxSources: vi.fn().mockResolvedValue(undefined),
+    onCreateServer: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+  return render(
+    <I18nProvider>
+      <LocaleSwitch />
+      <SettingsPanel {...props} />
+    </I18nProvider>,
+  );
+}
+
 describe("SettingsPanel", () => {
+  it("renders async success feedback in the current locale and retranslates validation", async () => {
+    const user = userEvent.setup();
+    let resolveSave!: () => void;
+    const onSaveMaxSources = vi.fn(
+      () => new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
+    renderLocalizedSettings({ onSaveMaxSources });
+
+    const input = screen.getByLabelText("Max sources");
+    await user.clear(input);
+    await user.type(input, "0");
+    expect(screen.getByText("Enter a whole number from 1 to 50.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use Chinese" }));
+    expect(screen.getByText("请输入 1 到 50 的整数。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Use English" }));
+
+    await user.clear(input);
+    await user.type(input, "12");
+    await user.click(screen.getByRole("button", { name: "Save source limit" }));
+    await user.click(screen.getByRole("button", { name: "Use Chinese" }));
+
+    resolveSave();
+
+    expect(await screen.findByText("来源限制已保存。")).toBeInTheDocument();
+  });
+
+  it("retranslates frontend failure feedback but preserves raw API errors", async () => {
+    const user = userEvent.setup();
+    const onSaveMaxSources = vi.fn().mockRejectedValue("unknown failure");
+    renderLocalizedSettings({ onSaveMaxSources });
+
+    const input = screen.getByLabelText("Max sources");
+    await user.clear(input);
+    await user.type(input, "12");
+    await user.click(screen.getByRole("button", { name: "Save source limit" }));
+    expect(await screen.findByText("Failed to save source limit.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use Chinese" }));
+    expect(screen.getByText("保存来源限制失败。")).toBeInTheDocument();
+
+    const rawError = new Error("Backend detail stays raw");
+    const secondInput = screen.getByLabelText("最大来源数");
+    await user.clear(secondInput);
+    await user.type(secondInput, "13");
+    onSaveMaxSources.mockRejectedValueOnce(rawError);
+    await user.click(screen.getByRole("button", { name: "保存来源限制" }));
+    expect(await screen.findByText("Backend detail stays raw")).toBeInTheDocument();
+  });
+
   it("creates a profile, clears the API key field, and does not render persisted masked keys", async () => {
     const user = userEvent.setup();
     const onCreateProfile = vi.fn().mockResolvedValue(undefined);

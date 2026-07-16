@@ -38,6 +38,23 @@ describe("api client", () => {
     await expect(api.getConversation(99)).rejects.toMatchObject({
       message: "Conversation not found",
       status: 404,
+      detail: "Conversation not found",
+    });
+  });
+
+  it("keeps an empty backend error structured for localized UI fallback", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({}),
+      }),
+    );
+
+    await expect(api.listConversations()).rejects.toMatchObject({
+      status: 503,
+      detail: null,
     });
   });
 

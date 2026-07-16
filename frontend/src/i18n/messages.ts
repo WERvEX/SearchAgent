@@ -1,3 +1,5 @@
+import type { EventStreamStatus, KnownConversationStatus, ResearchLifecycleEventType } from "../api/types";
+
 export const enMessages = {
   "app.selectedProfile": "Selected profile: {name}",
   "app.loadingWorkspace": "Loading workspace...",
@@ -11,6 +13,9 @@ export const enMessages = {
   "app.failedToResumeResearch": "Failed to resume research.",
   "app.reportLoaded": "Report loaded.",
   "app.failedToLoadReport": "Failed to load report.",
+  "app.failedToLoadProfiles": "Failed to load profiles.",
+  "app.failedToLoadSourceLimit": "Failed to load source limit.",
+  "app.failedToLoadMcpServers": "Failed to load MCP servers.",
   "app.profile": "Profile: {name}",
   "app.selected": "Selected",
   "app.noLlmProfile": "No LLM profile available.",
@@ -23,6 +28,7 @@ export const enMessages = {
   "app.maxSources": "Max sources",
   "app.mcpServers": "MCP servers",
   "shell.primaryNavigation": "Primary navigation",
+  "shell.languageSelector": "Language selector",
   "shell.research": "Research",
   "shell.settings": "Settings",
   "shell.switchToChinese": "Switch language to Chinese",
@@ -30,6 +36,8 @@ export const enMessages = {
   "conversation.history": "History",
   "conversation.new": "New",
   "conversation.empty": "No conversations yet",
+  "conversation.untitled": "Untitled",
+  "api.requestFailed": "Request failed with status {status}.",
   "workspace.selectConversation": "Select or create a conversation",
   "workspace.ready": "Ready for research",
   "workspace.starting": "Starting research",
@@ -152,9 +160,10 @@ export type MessageKey = keyof typeof enMessages;
 export type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
 export const zhCNMessages: Record<MessageKey, string> = {
-  "app.selectedProfile": "当前配置：{name}", "app.loadingWorkspace": "正在加载工作区...", "app.createConversation": "新建对话以开始研究。", "app.conversationCreated": "对话已创建。", "app.unableToLoadWorkspace": "无法加载工作区。", "app.failedToLoadWorkspace": "加载工作区失败。", "app.failedToCreateConversation": "创建对话失败。", "app.failedToLoadConversation": "加载对话失败。", "app.failedToStartResearch": "启动研究失败。", "app.failedToResumeResearch": "恢复研究失败。", "app.reportLoaded": "报告已加载。", "app.failedToLoadReport": "加载报告失败。", "app.profile": "配置：{name}", "app.selected": "已选中", "app.noLlmProfile": "没有可用的 LLM 配置。", "app.researchSummary": "研究摘要", "app.sessionSettings": "当前会话设置来自后端。", "app.activeProfile": "当前配置", "app.noProfileSelected": "未选择配置", "app.backendDefault": "后端默认", "app.notConfigured": "未配置", "app.maxSources": "最大来源数", "app.mcpServers": "MCP 服务器",
-  "shell.primaryNavigation": "主导航", "shell.research": "研究", "shell.settings": "设置", "shell.switchToChinese": "切换语言为中文", "shell.switchToEnglish": "切换语言为英文",
-  "conversation.history": "历史记录", "conversation.new": "新建", "conversation.empty": "暂无对话",
+  "app.selectedProfile": "当前配置：{name}", "app.loadingWorkspace": "正在加载工作区...", "app.createConversation": "新建对话以开始研究。", "app.conversationCreated": "对话已创建。", "app.unableToLoadWorkspace": "无法加载工作区。", "app.failedToLoadWorkspace": "加载工作区失败。", "app.failedToCreateConversation": "创建对话失败。", "app.failedToLoadConversation": "加载对话失败。", "app.failedToStartResearch": "启动研究失败。", "app.failedToResumeResearch": "恢复研究失败。", "app.reportLoaded": "报告已加载。", "app.failedToLoadReport": "加载报告失败。", "app.failedToLoadProfiles": "加载配置失败。", "app.failedToLoadSourceLimit": "加载来源限制失败。", "app.failedToLoadMcpServers": "加载 MCP 服务器失败。", "app.profile": "配置：{name}", "app.selected": "已选中", "app.noLlmProfile": "没有可用的 LLM 配置。", "app.researchSummary": "研究摘要", "app.sessionSettings": "当前会话设置来自后端。", "app.activeProfile": "当前配置", "app.noProfileSelected": "未选择配置", "app.backendDefault": "后端默认", "app.notConfigured": "未配置", "app.maxSources": "最大来源数", "app.mcpServers": "MCP 服务器",
+  "shell.primaryNavigation": "主导航", "shell.languageSelector": "语言选择", "shell.research": "研究", "shell.settings": "设置", "shell.switchToChinese": "切换语言为中文", "shell.switchToEnglish": "切换语言为英文",
+  "conversation.history": "历史记录", "conversation.new": "新建", "conversation.empty": "暂无对话", "conversation.untitled": "未命名",
+  "api.requestFailed": "请求失败，状态码 {status}。",
   "workspace.selectConversation": "选择或新建对话", "workspace.ready": "准备开始研究", "workspace.starting": "正在启动研究", "workspace.active": "研究进行中", "workspace.awaitingApproval": "需要确认计划", "workspace.resuming": "正在恢复研究", "workspace.completed": "研究已完成", "workspace.failed": "研究失败", "workspace.noMessages": "暂无消息。开始一项研究请求。", "workspace.chooseConversation": "选择一个对话以查看活动。", "workspace.request": "研究请求", "workspace.start": "开始",
   "plan.confirmation": "计划确认", "plan.submitting": "正在提交决策", "plan.waiting": "等待决策", "plan.none": "没有待处理的决策", "plan.startToGenerate": "开始一项研究请求以生成计划。", "plan.noOptions": "暂无计划选项", "plan.feedback": "重新规划反馈", "plan.approve": "批准计划", "plan.replan": "重新规划",
   "progress.title": "进度", "progress.empty": "暂无事件", "progress.message": "消息",
@@ -168,18 +177,64 @@ export const zhCNMessages: Record<MessageKey, string> = {
   "event.connecting": "正在连接", "event.open": "已连接", "event.closed": "已关闭", "event.error": "连接错误", "event.unavailable": "不可用", "event.research.started": "研究已启动", "event.research.plan_ready": "计划已就绪", "event.research.awaiting_approval": "等待确认", "event.research.resumed": "研究已恢复", "event.research.sources_collected": "已收集来源", "event.research.report_ready": "报告已就绪", "event.research.completed": "研究已完成", "event.research.failed": "研究失败",
 };
 
-const knownStatuses: Record<string, MessageKey> = { idle: "status.idle", running: "status.running", active: "status.active", completed: "status.completed", failed: "status.failed" };
-const knownRoles: Record<string, MessageKey> = { user: "role.user", assistant: "role.assistant", system: "role.system", tool: "role.tool" };
-const knownEventStatuses: Record<string, MessageKey> = { connecting: "event.connecting", open: "event.open", closed: "event.closed", error: "event.error", unavailable: "event.unavailable" };
-const knownLifecycleEvents: Record<string, MessageKey> = {
-  "research.started": "event.research.started", "research.plan_ready": "event.research.plan_ready", "research.awaiting_approval": "event.research.awaiting_approval", "research.resumed": "event.research.resumed", "research.sources_collected": "event.research.sources_collected", "research.report_ready": "event.research.report_ready", "research.completed": "event.research.completed", "research.failed": "event.research.failed",
-};
+const KNOWN_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
+type KnownMessageRole = (typeof KNOWN_MESSAGE_ROLES)[number];
 
-function translateKnown(t: Translate, values: Record<string, MessageKey>, value: string) {
-  return values[value] ? t(values[value]) : value;
+const knownStatuses = {
+  idle: "status.idle",
+  running: "status.running",
+  active: "status.active",
+  completed: "status.completed",
+  failed: "status.failed",
+} satisfies Record<KnownConversationStatus, MessageKey>;
+const knownRoles = {
+  user: "role.user",
+  assistant: "role.assistant",
+  system: "role.system",
+  tool: "role.tool",
+} satisfies Record<KnownMessageRole, MessageKey>;
+const knownEventStatuses = { connecting: "event.connecting", open: "event.open", closed: "event.closed", error: "event.error", unavailable: "event.unavailable" } satisfies Record<EventStreamStatus, MessageKey>;
+const knownLifecycleEvents = {
+  "research.started": "event.research.started", "research.plan_ready": "event.research.plan_ready", "research.awaiting_approval": "event.research.awaiting_approval", "research.resumed": "event.research.resumed", "research.sources_collected": "event.research.sources_collected", "research.report_ready": "event.research.report_ready", "research.completed": "event.research.completed", "research.failed": "event.research.failed",
+} satisfies Record<ResearchLifecycleEventType, MessageKey>;
+
+function translateKnown<K extends string>(t: Translate, values: Record<K, MessageKey>, value: string) {
+  return value in values ? t(values[value as K]) : value;
 }
 
 export function translateStatus(t: Translate, status: string) { return translateKnown(t, knownStatuses, status); }
 export function translateRole(t: Translate, role: string) { return translateKnown(t, knownRoles, role); }
 export function translateEventStatus(t: Translate, status: string) { return translateKnown(t, knownEventStatuses, status); }
 export function translateLifecycleEvent(t: Translate, event: string) { return translateKnown(t, knownLifecycleEvents, event); }
+
+export type LocalizedMessage =
+  | { kind: "localized"; key: MessageKey; values?: Record<string, string | number> }
+  | { kind: "raw"; text: string };
+
+export function localizedMessage(
+  key: MessageKey,
+  values?: Record<string, string | number>,
+): LocalizedMessage {
+  return values ? { kind: "localized", key, values } : { kind: "localized", key };
+}
+
+export function rawMessage(text: string): LocalizedMessage {
+  return { kind: "raw", text };
+}
+
+export function renderLocalizedMessage(t: Translate, message: LocalizedMessage) {
+  return message.kind === "raw" ? message.text : t(message.key, message.values);
+}
+
+export function messageFromError(error: unknown, fallbackKey: MessageKey): LocalizedMessage {
+  if (typeof error === "object" && error !== null && "status" in error && typeof error.status === "number") {
+    const detail = "detail" in error && typeof error.detail === "string" ? error.detail : null;
+    return detail ? rawMessage(detail) : localizedMessage("api.requestFailed", { status: error.status });
+  }
+
+  if (error instanceof Error && error.message) {
+    return rawMessage(error.message);
+  }
+
+  return localizedMessage(fallbackKey);
+}

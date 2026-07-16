@@ -9,19 +9,29 @@ import type {
   ResearchRunResponse,
 } from "./types";
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string | null;
+
+  constructor(status: number, detail: string | null) {
+    super(detail ?? `HTTP ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, init);
   if (!response.ok) {
-    let message = `Request failed with ${response.status}`;
+    let detail: string | null = null;
     try {
       const body = await response.json();
-      message = typeof body.detail === "string" ? body.detail : message;
+      detail = typeof body.detail === "string" ? body.detail : null;
     } catch {
-      message = `Request failed with ${response.status}`;
+      detail = null;
     }
-    const error = new Error(message) as Error & { status: number };
-    error.status = response.status;
-    throw error;
+    throw new ApiError(response.status, detail);
   }
   return response.json() as Promise<T>;
 }

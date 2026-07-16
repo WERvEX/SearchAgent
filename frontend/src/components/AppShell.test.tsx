@@ -80,6 +80,7 @@ describe("AppShell", () => {
     );
 
     const chineseButton = screen.getByRole("button", { name: "Switch language to Chinese" });
+    expect(screen.getByRole("group", { name: "Language selector" })).toBeInTheDocument();
     expect(chineseButton).toHaveTextContent("中文");
     expect(chineseButton).toHaveAttribute("aria-pressed", "false");
 
@@ -89,6 +90,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "研究" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "切换语言为中文" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "切换语言为中文" })).toHaveClass("bg-zinc-900", "text-white");
     expect(localStorage.getItem("searchagent.locale")).toBe("zh-CN");
     expect(document.documentElement.lang).toBe("zh-CN");
   });

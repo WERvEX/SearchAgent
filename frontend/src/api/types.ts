@@ -1,7 +1,11 @@
+export const KNOWN_CONVERSATION_STATUSES = ["idle", "running", "active", "completed", "failed"] as const;
+export type KnownConversationStatus = (typeof KNOWN_CONVERSATION_STATUSES)[number];
+export type ConversationStatus = KnownConversationStatus | (string & {});
+
 export type ConversationRead = {
   id: number;
   title: string;
-  status: string;
+  status: ConversationStatus;
   created_at: string;
   updated_at: string;
 };

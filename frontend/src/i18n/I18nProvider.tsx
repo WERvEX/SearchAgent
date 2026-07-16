@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { enMessages, zhCNMessages, type MessageKey } from "./messages";
 
 export type Locale = "en" | "zh-CN";
@@ -51,28 +51,28 @@ function syncDocumentLocale(locale: Locale) {
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(resolveInitialLocale);
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
 
   useEffect(() => {
     syncDocumentLocale(locale);
   }, [locale]);
 
-  const value = useMemo<I18nContextValue>(
-    () => ({
-      locale,
-      setLocale(nextLocale) {
-        setLocaleState(nextLocale);
-        try {
-          window.localStorage.setItem(LOCALE_STORAGE_KEY, nextLocale);
-        } catch {
-          // Storage failures must not prevent language switching.
-        }
-      },
-      t(key, values) {
-        return interpolate(getMessages(locale)[key], values);
-      },
-    }),
-    [locale],
+  const setLocale = useCallback((nextLocale: Locale) => {
+    setLocaleState(nextLocale);
+    try {
+      window.localStorage.setItem(LOCALE_STORAGE_KEY, nextLocale);
+    } catch {
+      // Storage failures must not prevent language switching.
+    }
+  }, []);
+
+  const t = useCallback<I18nContextValue["t"]>(
+    (key, values) => interpolate(getMessages(localeRef.current)[key], values),
+    [],
   );
+
+  const value = useMemo<I18nContextValue>(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
