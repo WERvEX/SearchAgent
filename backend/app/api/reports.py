@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -41,3 +42,12 @@ async def export_pdf(report_id: int, session: Session = Depends(get_db)):
     report.file_path = str(path)
     session.commit()
     return {"format": "pdf", "file_path": str(path)}
+
+
+@router.get("/{report_id}/download.pdf")
+async def download_pdf(report_id: int, session: Session = Depends(get_db)):
+    report = _get_report_or_404(session, report_id)
+    path = await report_export.export_pdf(report)
+    report.file_path = str(path)
+    session.commit()
+    return FileResponse(path, media_type="application/pdf", filename=path.name)

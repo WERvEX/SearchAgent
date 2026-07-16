@@ -316,10 +316,12 @@ def test_aggregate_evidence_deduplicates_findings_and_marks_criteria(session):
     ]
 
 
-def test_write_report_generates_cited_markdown_and_persists_report(session):
+def test_write_report_generates_cited_markdown_persists_report_and_publishes_event(session, monkeypatch):
     from sqlalchemy import select
 
     from app.db.models import Conversation, ResearchProject, Report
+    from app.core.events import EventBus
+    from app.engine import nodes as nodes_module
     from app.engine.nodes import make_nodes
     from app.engine.context import EngineContext
 
@@ -336,6 +338,8 @@ def test_write_report_generates_cited_markdown_and_persists_report(session):
 
     ctx = EngineContext(session=session, profile_id=1, llm_factory=lambda: _FakeLLM())
     nodes = make_nodes(ctx)
+    bus = EventBus()
+    monkeypatch.setattr(nodes_module, "get_event_bus", lambda: bus)
 
     out = nodes["write_report"](
         {
@@ -355,12 +359,20 @@ def test_write_report_generates_cited_markdown_and_persists_report(session):
                 }
             ],
             "report_md": None,
+            "report_id": None,
+            "run_id": "run-1",
         }
     )
 
     assert out["report_md"].startswith("# 研究报告")
     assert "[^1]" in out["report_md"]
     assert "https://example.com/report" in out["report_md"]
+    assert isinstance(out["report_id"], int)
+
+    event = next(bus.subscribe(replay_limit=1))
+    assert event["type"] == "research.report_ready"
+    assert event["data"]["run_id"] == "run-1"
+    assert event["data"]["report_id"] == out["report_id"]
 
     reports = session.scalars(select(Report).order_by(Report.id)).all()
     assert len(reports) == 1

@@ -1,2 +1,50 @@
+# Codex and local implementation scratch files
 .worktrees/
 .superpowers/
+.review-tmp/
+docs/HANDOVER.md
+
+# Local environment and editor settings
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+
+# Python build, runtime, and test outputs (source tests remain tracked)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+**/.pytest_tmp*/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+backend/build/
+backend/dist/
+backend/.test-tmp*/
+backend/.tmp-pytest*/
+backend/.runtime-check-*/
+
+# Frontend dependencies, caches, test output, and builds
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+frontend/.npm-cache/
+frontend/tsconfig.tsbuildinfo
+frontend/.runtime-check-*/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local SearchAgent runtime data
+.searchagent/
+backend/.searchagent/

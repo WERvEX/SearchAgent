@@ -35,11 +35,17 @@ def session(app_home):
     engine.dispose()
 
 
-def test_start_and_resume_research_runs_to_report(session):
+def test_start_and_resume_research_runs_to_report_and_publishes_lifecycle_events(session, monkeypatch):
     from sqlalchemy import select
 
     from app.db.models import Conversation, Message, Report, ResearchProject
     from app.engine.runner import resume_research, start_research
+    from app.engine import nodes, runner
+    from app.core.events import EventBus
+
+    bus = EventBus()
+    monkeypatch.setattr(runner, "get_event_bus", lambda: bus)
+    monkeypatch.setattr(nodes, "get_event_bus", lambda: bus)
 
     conv = Conversation(title="c")
     session.add(conv)
@@ -76,9 +82,25 @@ def test_start_and_resume_research_runs_to_report(session):
 
     assert resumed["interrupted"] is False
     assert resumed["state"]["approved"] is True
+    assert isinstance(resumed["state"]["report_id"], int)
     assert resumed["state"]["report_md"].startswith("# 研究报告")
 
     session.refresh(projects[0])
     reports = session.scalars(select(Report).order_by(Report.id)).all()
     assert projects[0].status == "done"
     assert len(reports) == 1
+    assert reports[0].id == resumed["state"]["report_id"]
+
+    subscriber = bus.subscribe(replay_limit=20)
+    events = [next(subscriber) for _ in range(7)]
+    assert [event["type"] for event in events] == [
+        "research.started",
+        "research.plan_ready",
+        "research.awaiting_approval",
+        "research.resumed",
+        "research.sources_collected",
+        "research.report_ready",
+        "research.completed",
+    ]
+    assert all(event["data"]["thread_id"] == started["thread_id"] for event in events)
+    assert events[-2]["data"]["report_id"] == resumed["state"]["report_id"]

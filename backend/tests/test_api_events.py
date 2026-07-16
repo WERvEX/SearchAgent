@@ -1,4 +1,18 @@
-from fastapi.testclient import TestClient
+import asyncio
+import time
+
+import pytest
+
+
+def _read_sse_chunk(response):
+    async def read():
+        iterator = response.body_iterator
+        try:
+            return await anext(iterator)
+        finally:
+            await iterator.aclose()
+
+    return asyncio.run(read())
 
 
 def test_event_bus_broadcasts_to_each_subscriber(app_home):
@@ -8,11 +22,11 @@ def test_event_bus_broadcasts_to_each_subscriber(app_home):
     from app.core.events import EventBus
 
     bus = EventBus()
-    first = bus.subscribe(limit=1)
-    second = bus.subscribe(limit=1)
+    first = bus.subscribe()
+    second = bus.subscribe()
     received = queue.Queue()
 
-    bus.publish({"type": "progress", "message": "running"})
+    published = bus.publish({"type": "research.progress", "data": {"message": "running"}})
 
     def collect(name, iterator):
         received.put((name, next(iterator)))
@@ -31,29 +45,97 @@ def test_event_bus_broadcasts_to_each_subscriber(app_home):
         pass
 
     assert sorted(results) == [
-        ("first", {"type": "progress", "message": "running"}),
-        ("second", {"type": "progress", "message": "running"}),
+        ("first", published),
+        ("second", published),
     ]
 
 
 def test_event_bus_formats_sse_messages(app_home):
     from app.core.events import format_sse
 
-    assert format_sse({"type": "progress", "message": "running"}) == (
-        'data: {"type":"progress","message":"running"}\n\n'
+    assert format_sse(
+        {"id": "7", "type": "research.progress", "data": {"message": "running"}}
+    ) == (
+        'id: 7\nevent: research.progress\ndata: {"message":"running"}\n\n'
     )
 
 
-def test_events_endpoint_streams_published_event(app_home):
-    from app.core.events import get_event_bus
-    from app.main import create_app
+def test_event_bus_replays_only_events_after_last_event_id_and_stays_live(app_home):
+    from app.core.events import EventBus
 
-    bus = get_event_bus()
-    bus.publish({"type": "progress", "message": "running"})
+    bus = EventBus(history_size=10)
+    first = bus.publish({"type": "research.started", "data": {"run_id": "run-1"}})
+    second = bus.publish({"type": "research.plan_ready", "data": {"run_id": "run-1"}})
 
-    client = TestClient(create_app())
-    with client.stream("GET", "/events?limit=1") as response:
-        body = next(response.iter_text())
+    subscriber = bus.subscribe(last_event_id=first["id"], replay_limit=1)
+    assert next(subscriber) == second
 
-    assert response.status_code == 200
-    assert '"type":"progress"' in body
+    third = bus.publish({"type": "research.completed", "data": {"run_id": "run-1"}})
+    assert next(subscriber) == third
+
+
+def test_event_bus_filters_replay_and_live_events_by_thread_id(app_home):
+    from app.core.events import EventBus
+
+    bus = EventBus(history_size=10)
+    ignored = bus.publish({"type": "research.started", "data": {"thread_id": "other-thread"}})
+    matching = bus.publish({"type": "research.plan_ready", "data": {"thread_id": "thread-1"}})
+
+    subscriber = bus.subscribe(event_filter=lambda event: event["data"].get("thread_id") == "thread-1")
+    assert next(subscriber) == matching
+
+    bus.publish({"type": "research.completed", "data": {"thread_id": "other-thread"}})
+    live = bus.publish({"type": "research.completed", "data": {"thread_id": "thread-1"}})
+    assert next(subscriber) == live
+    assert ignored["id"] < matching["id"] < live["id"]
+
+
+def test_stream_events_filters_replay_by_thread_and_conversation_id(app_home, monkeypatch):
+    from fastapi import Request
+
+    from app.api import events as events_api
+    from app.core.events import EventBus
+
+    bus = EventBus(history_size=10)
+    bus.publish({"type": "research.started", "data": {"thread_id": "other", "conversation_id": 9}})
+    bus.publish({"type": "research.started", "data": {"thread_id": "thread-1", "conversation_id": 9}})
+    bus.publish({"type": "research.started", "data": {"thread_id": "other", "conversation_id": 4}})
+    matching = bus.publish({"type": "research.plan_ready", "data": {"thread_id": "thread-1", "conversation_id": 4}})
+    monkeypatch.setattr(events_api, "get_event_bus", lambda: bus)
+
+    request = Request({"type": "http", "method": "GET", "path": "/events", "headers": [(b"last-event-id", b"1")]})
+    response = events_api.stream_events(request, thread_id="thread-1", conversation_id=4)
+
+    assert _read_sse_chunk(response) == (
+        f'id: {matching["id"]}\nevent: research.plan_ready\ndata: {{"thread_id":"thread-1","conversation_id":4}}\n\n'
+    )
+    assert not bus._subscribers
+
+
+def test_stream_events_releases_idle_subscription_after_disconnect(app_home, monkeypatch):
+    from app.api import events as events_api
+    from app.core.events import EventBus
+
+    bus = EventBus()
+    monkeypatch.setattr(events_api, "get_event_bus", lambda: bus)
+
+    class DisconnectAfterSubscription:
+        headers = {}
+
+        async def is_disconnected(self):
+            return bool(bus._subscribers)
+
+    async def consume_until_disconnect():
+        response = events_api.stream_events(DisconnectAfterSubscription(), conversation_id=4)
+        iterator = response.body_iterator
+        try:
+            with pytest.raises(StopAsyncIteration):
+                await anext(iterator)
+        finally:
+            await iterator.aclose()
+
+    started_at = time.monotonic()
+    asyncio.run(consume_until_disconnect())
+
+    assert time.monotonic() - started_at < 1
+    assert not bus._subscribers
