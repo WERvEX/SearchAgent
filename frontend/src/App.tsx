@@ -19,6 +19,8 @@ import { ReportPanel } from "./components/ReportPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useEventStream } from "./hooks/useEventStream";
+import { useI18n } from "./i18n/I18nProvider";
+import type { MessageKey } from "./i18n/messages";
 
 function createPlaceholderRun(threadId: string): ResearchRunResponse {
   return {
@@ -70,23 +72,23 @@ function getErrorStatus(error: unknown) {
     : null;
 }
 
-function statusMessageForPhase(phase: ResearchRunPhase) {
+function statusMessageForPhase(phase: ResearchRunPhase): MessageKey {
   switch (phase) {
     case "starting":
-      return "Starting research.";
+      return "phase.starting";
     case "active":
-      return "Research in progress.";
+      return "phase.active";
     case "awaiting_approval":
-      return "Plan decision required.";
+      return "phase.awaiting_approval";
     case "resuming":
-      return "Resuming research.";
+      return "phase.resuming";
     case "completed":
-      return "Research completed.";
+      return "phase.completed";
     case "failed":
-      return "Research failed.";
+      return "phase.failed";
     case "idle":
     default:
-      return "Ready for research.";
+      return "phase.idle";
   }
 }
 
@@ -117,6 +119,7 @@ function mergeLifecycleEventIntoRun(
 }
 
 export default function App() {
+  const { t } = useI18n();
   const [activePanel, setActivePanel] = useState<AppPanel>("research");
   const [conversations, setConversations] = useState<ConversationRead[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
@@ -133,7 +136,7 @@ export default function App() {
   const [currentRun, setCurrentRun] = useState<ResearchRunResponse | null>(null);
   const [retainedReportId, setRetainedReportId] = useState<number | null>(null);
   const [report, setReport] = useState<ReportRead | null>(null);
-  const [statusMessage, setStatusMessage] = useState("Loading workspace...");
+  const [statusMessageKey, setStatusMessageKey] = useState<MessageKey>("app.loadingWorkspace");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [runPhase, setRunPhase] = useState<ResearchRunPhase>("idle");
   const runPhaseRef = useRef<ResearchRunPhase>("idle");
@@ -158,25 +161,25 @@ export default function App() {
 
     if (event.event === "research.started" || event.event === "research.resumed") {
       updateRunPhase("active");
-      setStatusMessage(statusMessageForPhase("active"));
+      setStatusMessageKey(statusMessageForPhase("active"));
       return;
     }
 
     if (event.event === "research.awaiting_approval") {
       updateRunPhase("awaiting_approval");
-      setStatusMessage(statusMessageForPhase("awaiting_approval"));
+      setStatusMessageKey(statusMessageForPhase("awaiting_approval"));
       return;
     }
 
     if (event.event === "research.completed") {
       updateRunPhase("completed");
-      setStatusMessage(statusMessageForPhase("completed"));
+      setStatusMessageKey(statusMessageForPhase("completed"));
       return;
     }
 
     if (event.event === "research.failed") {
       updateRunPhase("failed");
-      setStatusMessage(statusMessageForPhase("failed"));
+      setStatusMessageKey(statusMessageForPhase("failed"));
       if (typeof event.data.message === "string") {
         setErrorMessage(event.data.message);
       }
@@ -220,12 +223,12 @@ export default function App() {
         if (conversationList[0]) {
           setActiveConversationId(conversationList[0].id);
         } else {
-          setStatusMessage("Create a conversation to begin.");
+          setStatusMessageKey("app.createConversation");
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : "Failed to load workspace.");
-          setStatusMessage("Unable to load workspace.");
+          setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadWorkspace"));
+          setStatusMessageKey("app.unableToLoadWorkspace");
         }
       }
     }
@@ -235,7 +238,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadMaxSourcesPreference]);
+  }, [loadMaxSourcesPreference, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -321,10 +324,10 @@ export default function App() {
         setCurrentRun(null);
         setRetainedReportId(null);
         updateRunPhase("idle");
-        setStatusMessage(statusMessageForPhase("idle"));
+        setStatusMessageKey(statusMessageForPhase("idle"));
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : "Failed to load conversation.");
+          setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadConversation"));
         }
       }
     }
@@ -334,7 +337,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeConversationId, updateRunPhase]);
+  }, [activeConversationId, t, updateRunPhase]);
 
   useEffect(() => {
     if (reportId === null) {
@@ -355,7 +358,7 @@ export default function App() {
       } catch (error) {
         if (!cancelled) {
           setReport(null);
-          setErrorMessage(error instanceof Error ? error.message : "Failed to load report.");
+          setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadReport"));
         }
       }
     }
@@ -365,7 +368,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [reportId]);
+  }, [reportId, t]);
 
   const plan = useMemo(() => {
     const payload = currentRun?.interrupt_payload;
@@ -405,9 +408,9 @@ export default function App() {
       const created = await api.createConversation("Untitled");
       setConversations((current) => [created, ...current]);
       setActiveConversationId(created.id);
-      setStatusMessage("Conversation created.");
+      setStatusMessageKey("app.conversationCreated");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to create conversation.");
+      setErrorMessage(error instanceof Error ? error.message : t("app.failedToCreateConversation"));
     }
   }
 
@@ -427,7 +430,7 @@ export default function App() {
         setErrorMessage(null);
         setCurrentRun(null);
         updateRunPhase("starting");
-        setStatusMessage(statusMessageForPhase("starting"));
+        setStatusMessageKey(statusMessageForPhase("starting"));
         const run = await api.startResearch({
         conversation_id: activeConversation.id,
         profile_id: selectedProfileId,
@@ -442,7 +445,7 @@ export default function App() {
           nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
           return nextPhase;
         });
-      setStatusMessage(statusMessageForPhase(nextPhase));
+      setStatusMessageKey(statusMessageForPhase(nextPhase));
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
         setConversations((current) =>
@@ -457,8 +460,8 @@ export default function App() {
           recoveredPhase = current === "completed" || current === "failed" ? current : "idle";
           return recoveredPhase;
         });
-        setStatusMessage(statusMessageForPhase(recoveredPhase));
-        setErrorMessage(error instanceof Error ? error.message : "Failed to start research.");
+        setStatusMessageKey(statusMessageForPhase(recoveredPhase));
+        setErrorMessage(error instanceof Error ? error.message : t("app.failedToStartResearch"));
       }
   }
 
@@ -477,7 +480,7 @@ export default function App() {
         resumePendingRef.current = true;
         setErrorMessage(null);
         updateRunPhase("resuming");
-        setStatusMessage(statusMessageForPhase("resuming"));
+        setStatusMessageKey(statusMessageForPhase("resuming"));
         const run = await api.resumeResearch(currentRun.thread_id, {
         profile_id: selectedProfileId,
         decision,
@@ -491,7 +494,7 @@ export default function App() {
           nextPhase = isStableRunPhase(current) ? current : deriveRunPhaseFromResponse(run);
           return nextPhase;
         });
-      setStatusMessage(statusMessageForPhase(nextPhase));
+      setStatusMessageKey(statusMessageForPhase(nextPhase));
       const detail = await api.getConversation(activeConversation.id);
       setActiveConversation(detail);
         setConversations((current) =>
@@ -506,8 +509,8 @@ export default function App() {
           recoveredPhase = current === "completed" || current === "failed" ? current : "awaiting_approval";
           return recoveredPhase;
         });
-        setStatusMessage(statusMessageForPhase(recoveredPhase));
-        setErrorMessage(error instanceof Error ? error.message : "Failed to resume research.");
+        setStatusMessageKey(statusMessageForPhase(recoveredPhase));
+        setErrorMessage(error instanceof Error ? error.message : t("app.failedToResumeResearch"));
       } finally {
       resumePendingRef.current = false;
     }
@@ -521,9 +524,9 @@ export default function App() {
     try {
       setErrorMessage(null);
       setReport(await api.getReport(reportId));
-      setStatusMessage("Report loaded.");
+      setStatusMessageKey("app.reportLoaded");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to load report.");
+      setErrorMessage(error instanceof Error ? error.message : t("app.failedToLoadReport"));
     }
   }
 
@@ -595,13 +598,13 @@ export default function App() {
         ) : (
           <div className="flex h-full flex-col">
             <div className="border-b border-zinc-200 bg-zinc-50 px-6 py-3 text-sm text-zinc-600">
-              <div>{statusMessage}</div>
+              <div>{t(statusMessageKey)}</div>
               {selectedProfileId ? (
                 <div className="mt-1 text-xs text-zinc-500">
-                  Profile: {profiles.find((profile) => profile.id === selectedProfileId)?.name ?? "Selected"}
+                  {t("app.profile", { name: profiles.find((profile) => profile.id === selectedProfileId)?.name ?? t("app.selected") })}
                 </div>
               ) : (
-                <div className="mt-1 text-xs text-amber-700">No LLM profile available.</div>
+                <div className="mt-1 text-xs text-amber-700">{t("app.noLlmProfile")}</div>
               )}
               {errorMessage ? <div className="mt-1 text-xs text-red-600">{errorMessage}</div> : null}
             </div>
@@ -630,24 +633,24 @@ export default function App() {
         activePanel === "settings" ? (
           <section className="h-full overflow-auto bg-white">
             <div className="border-b border-zinc-200 px-4 py-4">
-              <h2 className="text-sm font-semibold text-zinc-950">Research summary</h2>
-              <p className="mt-1 text-xs text-zinc-500">Current session choices pulled from backend settings.</p>
+              <h2 className="text-sm font-semibold text-zinc-950">{t("app.researchSummary")}</h2>
+              <p className="mt-1 text-xs text-zinc-500">{t("app.sessionSettings")}</p>
             </div>
             <dl className="divide-y divide-zinc-200 text-sm">
               <div className="px-4 py-3">
-                <dt className="text-xs uppercase tracking-wide text-zinc-500">Active profile</dt>
-                <dd className="mt-1 text-zinc-900">{selectedProfile?.name ?? "No profile selected"}</dd>
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">{t("app.activeProfile")}</dt>
+                <dd className="mt-1 text-zinc-900">{selectedProfile?.name ?? t("app.noProfileSelected")}</dd>
               </div>
               <div className="px-4 py-3">
-                <dt className="text-xs uppercase tracking-wide text-zinc-500">Backend default</dt>
-                <dd className="mt-1 text-zinc-900">{backendDefaultProfile?.name ?? "Not configured"}</dd>
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">{t("app.backendDefault")}</dt>
+                <dd className="mt-1 text-zinc-900">{backendDefaultProfile?.name ?? t("app.notConfigured")}</dd>
               </div>
               <div className="px-4 py-3">
-                <dt className="text-xs uppercase tracking-wide text-zinc-500">Max sources</dt>
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">{t("app.maxSources")}</dt>
                 <dd className="mt-1 text-zinc-900">{maxSources}</dd>
               </div>
               <div className="px-4 py-3">
-                <dt className="text-xs uppercase tracking-wide text-zinc-500">MCP servers</dt>
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">{t("app.mcpServers")}</dt>
                 <dd className="mt-1 text-zinc-900">{servers.length}</dd>
               </div>
             </dl>

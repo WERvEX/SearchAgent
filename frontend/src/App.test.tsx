@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { api } from "./api/client";
+import { I18nProvider } from "./i18n/I18nProvider";
 
 vi.mock("./api/client", () => ({
   api: {
@@ -80,6 +81,7 @@ class MockEventSource {
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     MockEventSource.instance = null;
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
@@ -101,6 +103,21 @@ describe("App", () => {
       enabled: true,
     });
     vi.mocked(api.getConversation).mockResolvedValue(conversationDetail);
+  });
+
+  it("updates an existing application status message when the locale changes", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Ready for research.");
+    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
+
+    expect(await screen.findByText("准备开始研究。")).toBeInTheDocument();
   });
 
   it("maps the backend interrupted plan payload and submits the selected approval", async () => {
@@ -225,7 +242,7 @@ describe("App", () => {
       } as MessageEvent<string>);
     });
 
-    expect(await screen.findByText("research.plan_ready")).toBeInTheDocument();
+    expect(await screen.findByText("Plan ready")).toBeInTheDocument();
     expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
   });
 
@@ -256,7 +273,7 @@ describe("App", () => {
 
     await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?thread_id=thread-1&replay_limit=100"));
     expect(conversationSource?.closed).toBe(true);
-    expect(await screen.findByText("research.started")).toBeInTheDocument();
+    expect(await screen.findByText("Research started")).toBeInTheDocument();
 
     await act(async () => {
       resolveStart!({ thread_id: "thread-1", state: {}, interrupted: false, interrupt_payload: null });
@@ -514,7 +531,7 @@ describe("App", () => {
       } as MessageEvent<string>);
     });
 
-    expect(await screen.findByText("research.resumed")).toBeInTheDocument();
+    expect(await screen.findByText("Research resumed")).toBeInTheDocument();
     expect(screen.getByText("Research in progress")).toBeInTheDocument();
     expect(approveButton).toBeDisabled();
     expect(replanButton).toBeDisabled();
@@ -710,7 +727,7 @@ describe("App", () => {
     render(<App />);
 
     await screen.findByText("Search API evaluation");
-    expect(screen.getByText("unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.getByText("No events yet")).toBeInTheDocument();
   });
 

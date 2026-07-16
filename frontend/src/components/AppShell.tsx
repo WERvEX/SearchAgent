@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { History, Settings, Telescope } from "lucide-react";
+import { useI18n } from "../i18n/I18nProvider";
 
 export type AppPanel = "research" | "settings";
 
@@ -12,6 +13,8 @@ export type AppShellProps = {
 };
 
 export function AppShell({ left, main, right, activePanel, onPanelChange }: AppShellProps) {
+  const { locale, setLocale, t } = useI18n();
+
   return (
     <div className="app-shell min-h-screen bg-zinc-50 text-zinc-950">
       <header
@@ -22,7 +25,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
           <Telescope className="h-5 w-5 text-teal-700" aria-hidden="true" />
           <span>SearchAgent</span>
         </div>
-        <nav className="flex w-full flex-wrap items-center gap-1 sm:w-auto xl:w-auto xl:flex-nowrap" aria-label="Primary">
+        <nav className="flex w-full flex-wrap items-center gap-1 sm:w-auto xl:w-auto xl:flex-nowrap" aria-label={t("shell.primaryNavigation")}>
           <button
             type="button"
             className={activePanel === "research" ? "nav-button-active" : "nav-button"}
@@ -30,7 +33,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
             onClick={() => onPanelChange("research")}
           >
             <History className="h-4 w-4" aria-hidden="true" />
-            <span>Research</span>
+            <span>{t("shell.research")}</span>
           </button>
           <button
             type="button"
@@ -39,8 +42,28 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
             onClick={() => onPanelChange("settings")}
           >
             <Settings className="h-4 w-4" aria-hidden="true" />
-            <span>Settings</span>
+            <span>{t("shell.settings")}</span>
           </button>
+          <div className="ml-auto flex h-9 items-center border-l border-zinc-200 pl-1 sm:ml-1" role="group" aria-label={t("shell.primaryNavigation")}>
+            <button
+              type="button"
+              className="inline-flex h-8 min-w-9 items-center justify-center rounded-md px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+              aria-label={t("shell.switchToChinese")}
+              aria-pressed={locale === "zh-CN"}
+              onClick={() => setLocale("zh-CN")}
+            >
+              中文
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-8 min-w-9 items-center justify-center rounded-md px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+              aria-label={t("shell.switchToEnglish")}
+              aria-pressed={locale === "en"}
+              onClick={() => setLocale("en")}
+            >
+              EN
+            </button>
+          </div>
         </nav>
       </header>
       <div

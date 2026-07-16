@@ -1,4 +1,6 @@
 import type { ConversationRead } from "../api/types";
+import { useI18n } from "../i18n/I18nProvider";
+import { translateStatus } from "../i18n/messages";
 
 type ConversationPanelProps = {
   conversations: ConversationRead[];
@@ -8,12 +10,14 @@ type ConversationPanelProps = {
 };
 
 export function ConversationPanel({ conversations, activeId, onSelect, onCreate }: ConversationPanelProps) {
+  const { t } = useI18n();
+
   return (
     <section className="flex h-full flex-col bg-white">
       <div className="flex items-center justify-between border-b border-zinc-200 p-4">
-        <h2 className="text-sm font-semibold text-zinc-950">History</h2>
+        <h2 className="text-sm font-semibold text-zinc-950">{t("conversation.history")}</h2>
         <button type="button" className="nav-button" onClick={onCreate}>
-          New
+          {t("conversation.new")}
         </button>
       </div>
 
@@ -33,12 +37,12 @@ export function ConversationPanel({ conversations, activeId, onSelect, onCreate 
                 onClick={() => onSelect(conversation.id)}
               >
                 <span className="block truncate font-medium">{conversation.title}</span>
-                <span className="block text-xs opacity-70">{conversation.status}</span>
+                <span className="block text-xs opacity-70">{translateStatus(t, conversation.status)}</span>
               </button>
             ))}
           </div>
         ) : (
-          <div className="p-3 text-sm text-zinc-500">No conversations yet</div>
+          <div className="p-3 text-sm text-zinc-500">{t("conversation.empty")}</div>
         )}
       </div>
     </section>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, RefreshCcw } from "lucide-react";
+import { useI18n } from "../i18n/I18nProvider";
 
 export type PlanOption = {
   id: string;
@@ -21,6 +22,7 @@ type PlanPanelProps = {
 };
 
 export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan }: PlanPanelProps) {
+  const { t } = useI18n();
   const options = useMemo(() => plan?.options ?? [], [plan]);
   const defaultChoice = options[0]?.id ?? "";
   const [chosen, setChosen] = useState(defaultChoice);
@@ -41,13 +43,13 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
     <section className="flex h-full flex-col bg-white">
       <div className="border-b border-zinc-200 p-4">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-zinc-950">Plan confirmation</h2>
+          <h2 className="text-sm font-semibold text-zinc-950">{t("plan.confirmation")}</h2>
           <span className="text-xs text-zinc-500">
-            {pending ? "Submitting decision" : awaitingDecision ? "Waiting for decision" : "No pending decision"}
+            {pending ? t("plan.submitting") : awaitingDecision ? t("plan.waiting") : t("plan.none")}
           </span>
         </div>
         <p className="mt-2 text-sm text-zinc-600">
-          {plan?.summary ?? "Start a research request to generate a plan."}
+          {plan?.summary ?? t("plan.startToGenerate")}
         </p>
       </div>
 
@@ -74,13 +76,13 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
           ))
         ) : (
           <div className="rounded-md border border-dashed border-zinc-200 p-3 text-sm text-zinc-500">
-            No plan options available yet.
+            {t("plan.noOptions")}
           </div>
         )}
 
         <div>
           <label htmlFor="replan-feedback" className="mb-2 block text-sm font-medium text-zinc-700">
-            Replan feedback
+            {t("plan.feedback")}
           </label>
           <textarea
             id="replan-feedback"
@@ -88,7 +90,7 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
             value={feedback}
             disabled={pending}
             onChange={(event) => setFeedback(event.target.value)}
-            aria-label="Replan feedback"
+            aria-label={t("plan.feedback")}
           />
         </div>
       </div>
@@ -101,7 +103,7 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
           onClick={() => onApprove({ approved: true, chosen_option: chosen })}
         >
           <Check className="h-4 w-4" aria-hidden="true" />
-          Approve plan
+          {t("plan.approve")}
         </button>
         <button
           type="button"
@@ -110,7 +112,7 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
           onClick={() => onReplan({ approved: false, feedback })}
         >
           <RefreshCcw className="h-4 w-4" aria-hidden="true" />
-          Replan
+          {t("plan.replan")}
         </button>
       </div>
     </section>

@@ -6,7 +6,7 @@ describe("ProgressStream", () => {
   it("shows the connection status and an empty state", () => {
     render(<ProgressStream status="connecting" events={[]} />);
 
-    expect(screen.getByText("connecting")).toBeInTheDocument();
+    expect(screen.getByText("Connecting")).toBeInTheDocument();
     expect(screen.getByText("No events yet")).toBeInTheDocument();
   });
 
@@ -29,7 +29,7 @@ describe("ProgressStream", () => {
       />,
     );
 
-    expect(screen.getByText("research.plan_ready")).toBeInTheDocument();
+    expect(screen.getByText("Plan ready")).toBeInTheDocument();
     expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
   });
 
