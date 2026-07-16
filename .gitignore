@@ -1,4 +1,6 @@
 # Codex and local implementation scratch files
+.agents/
+.codex/
 .worktrees/
 .superpowers/
 .review-tmp/
@@ -12,6 +14,7 @@ docs/HANDOVER.md
 venv/
 .idea/
 .vscode/
+*.local
 *.log
 .DS_Store
 Thumbs.db
@@ -21,10 +24,17 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.hypothesis/
+.tox/
+.nox/
 **/.pytest_tmp*/
 .coverage
 .coverage.*
 coverage.xml
+junit.xml
 htmlcov/
 backend/build/
 backend/dist/
@@ -38,8 +48,12 @@ frontend/dist/
 frontend/coverage/
 frontend/.vite/
 frontend/.npm-cache/
+frontend/.eslintcache
 frontend/tsconfig.tsbuildinfo
 frontend/.runtime-check-*/
+test-results/
+playwright-report/
+blob-report/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
