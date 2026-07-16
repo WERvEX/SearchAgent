@@ -120,11 +120,34 @@ describe("App", () => {
     expect(await screen.findByText("准备开始研究。")).toBeInTheDocument();
   });
 
-  it("uses the stable Untitled fallback when creating a conversation in Chinese", async () => {
+  it("uses the localized fallback and preserves the backend title when creating in Chinese", async () => {
     const user = userEvent.setup();
+    localStorage.setItem("searchagent.locale", "zh-CN");
     vi.mocked(api.listConversations).mockResolvedValue([]);
     vi.mocked(api.createConversation).mockResolvedValue({
       id: 7,
+      title: "未命名",
+      status: "idle",
+      created_at: "",
+      updated_at: "",
+    });
+    render(
+      <I18nProvider>
+        <App />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "新建" }));
+
+    expect(api.createConversation).toHaveBeenCalledWith("未命名");
+    expect(await screen.findByText("未命名")).toBeInTheDocument();
+  });
+
+  it("uses the English fallback when creating a conversation in English", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listConversations).mockResolvedValue([]);
+    vi.mocked(api.createConversation).mockResolvedValue({
+      id: 8,
       title: "Untitled",
       status: "idle",
       created_at: "",
@@ -136,9 +159,7 @@ describe("App", () => {
       </I18nProvider>,
     );
 
-    await screen.findByText("Create a conversation to begin.");
-    await user.click(screen.getByRole("button", { name: "Switch language to Chinese" }));
-    await user.click(screen.getByRole("button", { name: "新建" }));
+    await user.click(await screen.findByRole("button", { name: "New" }));
 
     expect(api.createConversation).toHaveBeenCalledWith("Untitled");
   });

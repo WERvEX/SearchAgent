@@ -28,8 +28,6 @@ import {
   type MessageKey,
 } from "./i18n/messages";
 
-const DEFAULT_CONVERSATION_TITLE = "Untitled";
-
 function createPlaceholderRun(threadId: string): ResearchRunResponse {
   return {
     thread_id: threadId,
@@ -400,8 +398,7 @@ export default function App() {
   async function handleCreateConversation() {
     try {
       setErrorMessage(null);
-      // This persisted backend value must not vary with the UI locale.
-      const created = await api.createConversation(DEFAULT_CONVERSATION_TITLE);
+      const created = await api.createConversation(t("conversation.untitled"));
       setConversations((current) => [created, ...current]);
       setActiveConversationId(created.id);
       setStatusMessageKey("app.conversationCreated");

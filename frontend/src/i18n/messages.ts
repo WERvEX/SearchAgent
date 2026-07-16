@@ -199,7 +199,7 @@ const knownLifecycleEvents = {
 } satisfies Record<ResearchLifecycleEventType, MessageKey>;
 
 function translateKnown<K extends string>(t: Translate, values: Record<K, MessageKey>, value: string) {
-  return value in values ? t(values[value as K]) : value;
+  return Object.prototype.hasOwnProperty.call(values, value) ? t(values[value as K]) : value;
 }
 
 export function translateStatus(t: Translate, status: string) { return translateKnown(t, knownStatuses, status); }
