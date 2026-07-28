@@ -6,6 +6,8 @@ import type {
   MCPServer,
   PreferenceRead,
   ReportRead,
+  ProjectExecutionDetail,
+  ResearchFollowUpResponse,
   ResearchRunResponse,
 } from "./types";
 
@@ -55,12 +57,22 @@ export const api = {
     request<void>(`/conversations/${id}`, { method: "DELETE" }),
   listConversations: () => request<ConversationRead[]>("/conversations"),
   getConversation: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
-  startResearch: (payload: { conversation_id: number; profile_id: number; user_message: string }) =>
+    startResearch: (payload: { conversation_id: number; profile_id: number; user_message: string; response_language: "en" | "zh-CN" }) =>
     request<ResearchRunResponse>("/research/start", json("POST", payload)),
   getActiveResearch: (conversationId: number) =>
     request<ResearchRunResponse | null>(`/research/active/${conversationId}`),
-  resumeResearch: (threadId: string, payload: { profile_id?: number; decision: Record<string, unknown> }) =>
+    resumeResearch: (threadId: string, payload: { profile_id?: number; response_language?: "en" | "zh-CN"; decision: Record<string, unknown> }) =>
     request<ResearchRunResponse>(`/research/${encodeURIComponent(threadId)}/resume`, json("POST", payload)),
+  followUpResearch: (payload: {
+    conversation_id: number;
+    project_id: number;
+      profile_id: number;
+      message: string;
+      response_language: "en" | "zh-CN";
+    route_override?: "replan" | "report_revision";
+  }) => request<ResearchFollowUpResponse>("/research/follow-up", json("POST", payload)),
+  getProjectExecution: (projectId: number) =>
+    request<ProjectExecutionDetail>(`/research/projects/${projectId}/execution`),
   listLLMProfiles: () => request<LLMProfileRead[]>("/settings/llm-profiles"),
   createLLMProfile: (payload: LLMProfileCreate) =>
     request<LLMProfileRead>("/settings/llm-profiles", json("POST", payload)),

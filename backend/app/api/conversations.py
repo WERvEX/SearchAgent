@@ -96,7 +96,13 @@ def get_conversation(conversation_id: int, session: Session = Depends(get_db)):
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         messages=[
-            {"id": m.id, "role": m.role, "content": m.content, "meta": m.meta_json}
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "meta": m.meta_json,
+                "created_at": m.created_at.isoformat(),
+            }
             for m in conv.messages
         ],
         projects=[
@@ -108,6 +114,26 @@ def get_conversation(conversation_id: int, session: Session = Depends(get_db)):
                 "created_at": p.created_at.isoformat(),
                 "latest_report_id": latest_report.id if latest_report else None,
                 "latest_report_version": latest_report.version if latest_report else None,
+                "plans": [
+                    {
+                        "id": plan.id,
+                        "project_id": p.id,
+                        "version": plan.version,
+                        "summary": plan.summary,
+                        "steps": plan.options_json or [],
+                        "created_at": plan.created_at.isoformat(),
+                    }
+                    for plan in sorted(p.plans, key=lambda item: (item.version, item.id))
+                ],
+                "reports": [
+                    {
+                        "id": report.id,
+                        "project_id": p.id,
+                        "version": report.version,
+                        "created_at": report.created_at.isoformat(),
+                    }
+                    for report in sorted(p.reports, key=lambda item: (item.version, item.id))
+                ],
             }
             for p in conv.projects
             for latest_report in [

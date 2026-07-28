@@ -62,7 +62,7 @@ def test_sync_plan_and_steps_persists_business_tables(session):
     assert len(plans) == 1
     assert plans[0].summary == "Plan summary"
     assert plans[0].chosen_option == "A"
-    assert plans[0].options_json == [{"id": "A", "label": "Full review"}]
+    assert plans[0].options_json[0]["title"] == "Search"
 
     assert len(steps) == 1
     assert steps[0].project_id == project.id

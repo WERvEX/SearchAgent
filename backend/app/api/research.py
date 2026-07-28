@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.db.models import Conversation, LLMProfile
+from app.db.models import Conversation, LLMProfile, ResearchProject, Source, Step
 from app.engine import runner
 from app.schemas.research import (
     ResearchResumeRequest,
+    ResearchFollowUpRequest,
+    ResearchFollowUpResponse,
     ResearchRunResponse,
     ResearchStartRequest,
 )
@@ -27,6 +29,7 @@ async def start_research_endpoint(
         conversation_id=payload.conversation_id,
         profile_id=payload.profile_id,
         user_message=payload.user_message,
+        response_language=payload.response_language,
     )
 
 
@@ -41,7 +44,79 @@ async def resume_research_endpoint(
         thread_id=thread_id,
         decision=payload.decision,
         profile_id=payload.profile_id,
+        response_language=payload.response_language,
     )
+
+
+@router.post("/follow-up", response_model=ResearchFollowUpResponse)
+async def follow_up_research_endpoint(
+    payload: ResearchFollowUpRequest,
+    session: Session = Depends(get_db),
+):
+    if session.get(Conversation, payload.conversation_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if session.get(LLMProfile, payload.profile_id) is None:
+        raise HTTPException(status_code=404, detail="LLM profile not found")
+    try:
+        return await runner.follow_up_research(
+            session,
+            conversation_id=payload.conversation_id,
+            project_id=payload.project_id,
+            profile_id=payload.profile_id,
+            message=payload.message,
+            response_language=payload.response_language,
+            route_override=payload.route_override,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/execution")
+def project_execution_detail(
+    project_id: int,
+    session: Session = Depends(get_db),
+):
+    project = session.get(ResearchProject, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Research project not found")
+    project_completed = project.status in {"done", "completed"} and bool(project.reports)
+    return {
+        "project_id": project.id,
+        "status": project.status,
+        "steps": [
+            {
+                "id": step.id,
+                "seq": step.seq,
+                "title": step.title,
+                "description": step.description,
+                    "status": (
+                        "completed"
+                        if project_completed and step.status in {"pending", "running"}
+                        else step.status
+                    ),
+                "result_summary": step.result_summary,
+            }
+            for step in session.query(Step).filter(Step.project_id == project.id).order_by(Step.seq)
+        ],
+        "sources": [
+            {
+                "id": source.id,
+                "title": source.title,
+                "url": source.url,
+                "snippet": source.snippet,
+                "tool_name": source.tool_name,
+            }
+            for source in session.query(Source).filter(Source.project_id == project.id).order_by(Source.id)
+        ],
+        "reports": [
+            {
+                "id": report.id,
+                "version": report.version,
+                "created_at": report.created_at.isoformat(),
+            }
+            for report in sorted(project.reports, key=lambda item: (item.version, item.id))
+        ],
+    }
 
 
 @router.get("/active/{conversation_id}", response_model=ResearchRunResponse | None)

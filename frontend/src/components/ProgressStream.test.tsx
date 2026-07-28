@@ -34,6 +34,27 @@ describe("ProgressStream", () => {
     expect(screen.queryByText(/thread-1/)).not.toBeInTheDocument();
   });
 
+  it("shows source details as they arrive", () => {
+    render(
+      <ProgressStream
+        status="open"
+        events={[{
+          id: "event-source",
+          event: "research.source_collected",
+          data: {
+            thread_id: "thread-1",
+            source_count: 2,
+            source_title: "Official pricing",
+            tool_name: "search_web",
+          },
+        }]}
+      />,
+    );
+
+    expect(screen.getByText("Source collected")).toBeInTheDocument();
+    expect(screen.getByText("Source 2: Official pricing")).toBeInTheDocument();
+  });
+
   it("falls back to a readable representation for unknown events", () => {
     render(<ProgressStream status="open" events={[{ id: "event-1", event: "other.event", data: { note: "Unknown" } }]} />);
 

@@ -9,6 +9,7 @@ describe("ConversationPanel", () => {
     const onCreate = vi.fn();
     const onRename = vi.fn();
     const onDelete = vi.fn().mockResolvedValue(true);
+    const onCollapse = vi.fn();
 
     render(
       <ConversationPanel
@@ -21,6 +22,7 @@ describe("ConversationPanel", () => {
         onCreate={onCreate}
         onRename={onRename}
         onDelete={onDelete}
+        onCollapse={onCollapse}
       />,
     );
 
@@ -32,11 +34,13 @@ describe("ConversationPanel", () => {
     await userEvent.clear(screen.getByLabelText("Conversation title"));
     await userEvent.type(screen.getByLabelText("Conversation title"), "Renamed conversation");
     await userEvent.click(screen.getByRole("button", { name: "Save title" }));
-    await userEvent.click(screen.getByRole("button", { name: /^new$/i }));
+    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collapse history" }));
 
     expect(onSelect).toHaveBeenCalledWith(1);
     expect(onRename).toHaveBeenCalledWith(1, "Renamed conversation");
     expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onCollapse).toHaveBeenCalledTimes(1);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
     expect(screen.getByText("Delete “Alpha” and all of its research data?")).toBeInTheDocument();

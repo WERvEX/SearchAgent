@@ -105,7 +105,7 @@ def test_start_and_resume_research_runs_to_report_and_publishes_lifecycle_events
     messages = session.scalars(select(Message).order_by(Message.id)).all()
     projects = session.scalars(select(ResearchProject).order_by(ResearchProject.id)).all()
     assert messages[0].content == "研究可再生能源趋势"
-    assert projects[0].status == "awaiting_approval"
+    assert projects[0].status == "awaiting_execution"
 
     resumed = asyncio.run(
         resume_research(
@@ -131,18 +131,19 @@ def test_start_and_resume_research_runs_to_report_and_publishes_lifecycle_events
     assert reports[0].id == resumed["state"]["report_id"]
 
     subscriber = bus.subscribe(replay_limit=20)
-    events = [next(subscriber) for _ in range(7)]
-    assert [event["type"] for event in events] == [
-        "research.started",
-        "research.plan_ready",
-        "research.awaiting_approval",
-        "research.resumed",
-        "research.sources_collected",
-        "research.report_ready",
-        "research.completed",
-    ]
+    events = list(bus._history)
+    event_types = [event["type"] for event in events]
+    assert event_types[0] == "research.started"
+    assert "research.plan_ready" in event_types
+    assert "research.execution_started" in event_types
+    assert "research.step_started" in event_types
+    assert "research.step_completed" in event_types
+    assert "research.tool_started" in event_types
+    assert "research.source_collected" in event_types
+    assert "research.tool_completed" in event_types
+    assert event_types[-1] == "research.completed"
     assert all(event["data"]["thread_id"] == started["thread_id"] for event in events)
-    assert events[-2]["data"]["report_id"] == resumed["state"]["report_id"]
+    assert next(event for event in events if event["type"] == "research.report_ready")["data"]["report_id"] == resumed["state"]["report_id"]
 
 
 def test_replan_interrupts_again_without_generating_a_report(session):
@@ -179,7 +180,7 @@ def test_replan_interrupts_again_without_generating_a_report(session):
     assert replanned["interrupt_payload"]["plan"]["summary"] == "计划摘要"
     assert session.scalars(select(Report)).all() == []
     project = session.scalars(select(ResearchProject)).one()
-    assert project.status == "awaiting_approval"
+    assert project.status == "awaiting_execution"
 
 
 def test_start_marks_project_failed_when_llm_setup_fails(session):
@@ -229,14 +230,14 @@ def test_clarification_waits_persists_messages_and_can_resume_after_recovery(ses
         started = asyncio.run(start_research(
             session, conversation_id=conv.id, profile_id=1, user_message="新能源？", llm_factory=lambda: _ClarifyingRunnerLLM()
         ))
-        assert started["interrupt_payload"]["kind"] == "clarification"
+        assert started["interrupt_payload"]["kind"] == "planning_input"
         session.refresh(conv)
         assert conv.title == "新能源"
-        assert session.scalars(select(ResearchProject)).one().status == "awaiting_clarification"
+        assert session.scalars(select(ResearchProject)).one().status == "planning"
         assert session.scalars(select(Report)).all() == []
         active = asyncio.run(get_active_research(session, conversation_id=conv.id))
         assert active and active["thread_id"] == started["thread_id"]
-        assert active["interrupt_payload"]["kind"] == "clarification"
+        assert active["interrupt_payload"]["kind"] == "planning_input"
         messages = session.scalars(select(Message).order_by(Message.id)).all()
         assert [message.role for message in messages] == ["user", "assistant"]
 
@@ -248,9 +249,76 @@ def test_clarification_waits_persists_messages_and_can_resume_after_recovery(ses
             llm_factory=lambda: _ClarifyingRunnerLLM(),
         ))
         assert resumed["thread_id"] == started["thread_id"]
-        assert resumed["interrupt_payload"]["kind"] == "plan_approval"
-        assert session.scalars(select(ResearchProject)).one().status == "awaiting_approval"
-        assert [message.role for message in session.scalars(select(Message).order_by(Message.id)).all()] == ["user", "assistant", "user"]
+        assert resumed["interrupt_payload"]["kind"] == "plan_ready"
+        assert session.scalars(select(ResearchProject)).one().status == "awaiting_execution"
+        assert [message.role for message in session.scalars(select(Message).order_by(Message.id)).all()] == ["user", "assistant", "user", "assistant"]
         assert [event["type"] for event in bus._history if event["type"] == "research.completed"] == []
     finally:
         monkeypatch.undo()
+
+
+def test_execute_rejects_a_stale_plan_version(session):
+    from app.db.models import Conversation
+    from app.engine.runner import resume_research, start_research
+
+    conv = Conversation(title="c")
+    session.add(conv)
+    session.commit()
+    started = asyncio.run(start_research(
+        session,
+        conversation_id=conv.id,
+        profile_id=1,
+        user_message="研究可再生能源趋势",
+        llm_factory=lambda: _FakeRunnerLLM(),
+    ))
+    current_version = started["interrupt_payload"]["plan_version"]
+
+    with pytest.raises(ValueError, match="no longer current"):
+        asyncio.run(resume_research(
+            session,
+            thread_id=started["thread_id"],
+            decision={"kind": "execute_plan", "plan_version": current_version + 1},
+            profile_id=1,
+            llm_factory=lambda: _FakeRunnerLLM(),
+        ))
+
+
+def test_follow_up_can_create_a_report_only_revision(session):
+    from sqlalchemy import select
+
+    from app.db.models import Conversation, Message, Report, ResearchProject
+    from app.engine.persistence import persist_report
+    from app.engine.runner import follow_up_research
+
+    conv = Conversation(title="c", status="completed")
+    session.add(conv)
+    session.flush()
+    project = ResearchProject(
+        conversation_id=conv.id,
+        topic="renewable energy",
+        objective="Study renewable energy",
+        status="done",
+    )
+    session.add(project)
+    session.commit()
+    persist_report(session, project_id=project.id, content_md="# Original")
+
+    class _RevisionLLM:
+        def invoke(self, prompt):
+            class _R:
+                content = "# Revised\n\nA clearer summary."
+            return _R()
+
+    result = asyncio.run(follow_up_research(
+        session,
+        conversation_id=conv.id,
+        project_id=project.id,
+        profile_id=1,
+        message="请润色摘要并调整结构",
+        llm_factory=lambda: _RevisionLLM(),
+    ))
+
+    assert result["route"] == "report_revision"
+    assert result["report_id"] is not None
+    assert [report.version for report in session.scalars(select(Report).order_by(Report.version))] == [1, 2]
+    assert [message.role for message in session.scalars(select(Message).order_by(Message.id))] == ["user", "assistant"]

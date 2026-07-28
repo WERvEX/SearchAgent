@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.events import get_event_bus
-from app.db.models import Conversation, Message, ResearchProject
+from app.db.models import Conversation, Message, Report, ResearchProject, Source
 from app.engine.checkpointer import create_checkpointer
 from app.engine.context import EngineContext
 from app.engine.graph import compile_research_graph
@@ -55,8 +55,10 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
         return
     project.status = status
     project.conversation.status = {
-        "awaiting_clarification": "awaiting_clarification",
-        "awaiting_approval": "awaiting_approval",
+        "planning": "planning",
+        "awaiting_execution": "awaiting_execution",
+        "executing": "executing",
+        "revising_report": "revising_report",
         "done": "completed",
         "failed": "failed",
     }.get(status, "running")
@@ -102,17 +104,26 @@ def _record_message_once(
 
 
 def _waiting_status(payload: Optional[dict]) -> str:
-    return "awaiting_clarification" if payload and payload.get("kind") == "clarification" else "awaiting_approval"
+    if payload and payload.get("kind") in {"planning_input", "clarification"}:
+        return "planning"
+    return "awaiting_execution"
 
 
 def _waiting_event(payload: dict) -> str:
-    return "research.awaiting_clarification" if payload.get("kind") == "clarification" else "research.awaiting_approval"
+    if payload.get("kind") in {"planning_input", "clarification"}:
+        return "research.planning_message"
+    return "research.plan_ready"
 
 
-def _persist_clarification_question(
+def _persist_waiting_message(
     session: Session, *, thread_id: str, state: dict, profile_id: int, payload: Optional[dict]
 ) -> None:
-    if not payload or payload.get("kind") != "clarification":
+    if not payload or payload.get("kind") not in {
+        "planning_input",
+        "plan_ready",
+        "clarification",
+        "plan_approval",
+    }:
         return
     question = str(payload.get("message") or "").strip()
     conversation_id = state.get("conversation_id")
@@ -128,7 +139,7 @@ def _persist_clarification_question(
             thread_id=thread_id,
             project_id=project_id,
             profile_id=profile_id,
-            kind="clarification_question",
+            kind="plan_ready" if payload.get("kind") in {"plan_ready", "plan_approval"} else "planning_response",
             interrupt_id=str(payload.get("id") or ""),
         ),
     )
@@ -139,11 +150,17 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
         raise ValueError("Research run is not waiting for input")
     expected_kind = expected.get("kind", "plan_approval")
     actual_kind = decision.get("kind")
-    if actual_kind is None and expected_kind == "plan_approval":
+    if actual_kind is None and expected_kind in {"plan_approval", "plan_ready"}:
         decision = {**decision, "kind": "plan_approval"}
         actual_kind = "plan_approval"
-    if actual_kind != expected_kind:
-        raise ValueError(f"Expected a {expected_kind} response")
+    compatible = {
+        "planning_input": {"planning_message", "clarification"},
+        "plan_ready": {"planning_message", "execute_plan", "plan_approval"},
+        "clarification": {"clarification", "planning_message"},
+        "plan_approval": {"plan_approval", "planning_message", "execute_plan"},
+    }
+    if actual_kind not in compatible.get(expected_kind, {expected_kind}):
+        raise ValueError(f"Expected a response for {expected_kind}")
     return decision
 
 
@@ -168,9 +185,14 @@ async def start_research(
     conversation_id: int,
     profile_id: int,
     user_message: str,
+    response_language: str = "zh-CN",
     llm_factory: Optional[Callable[[], Any]] = None,
 ) -> dict:
     conversation = session.get(Conversation, conversation_id)
+    prior_messages = [
+        {"role": item.role, "content": item.content}
+        for item in (conversation.messages[-12:] if conversation is not None else [])
+    ]
     if conversation is not None:
         conversation.status = "running"
         if conversation.title.strip().lower() in {"untitled", "未命名"}:
@@ -206,9 +228,13 @@ async def start_research(
         "run_id": thread_id,
         "conversation_id": conversation_id,
         "project_id": project.id,
-        "messages": [{"role": "user", "content": user_message}],
+        "response_language": response_language,
+        "messages": [*prior_messages, {"role": "user", "content": user_message}],
         "objective": "",
         "plan": None,
+        "plan_version": None,
+        "plan_ready": False,
+        "planner_message": None,
         "approved": False,
         "replan_feedback": None,
         "clarification_question": None,
@@ -232,14 +258,15 @@ async def start_research(
         raise
     payload = _interrupt_payload(result, graph, config)
     state = _state_without_interrupt(result)
-    _persist_clarification_question(session, thread_id=thread_id, state=state, profile_id=profile_id, payload=payload)
+    _persist_waiting_message(session, thread_id=thread_id, state=state, profile_id=profile_id, payload=payload)
     _update_project_status(session, state, _waiting_status(payload) if payload is not None else "done")
     if payload is not None:
         _publish_lifecycle(
             _waiting_event(payload),
             thread_id=thread_id,
             state=state,
-            option_count=len((state.get("plan") or {}).get("options", [])),
+            plan_version=state.get("plan_version"),
+            step_count=len(state.get("steps") or []),
             interrupt_payload=payload,
         )
     else:
@@ -264,6 +291,7 @@ async def resume_research(
     thread_id: str,
     decision: dict,
     profile_id: int = 1,
+    response_language: str | None = None,
     llm_factory: Optional[Callable[[], Any]] = None,
 ) -> dict:
     config = _config(thread_id)
@@ -272,12 +300,15 @@ async def resume_research(
 
     graph_state = await asyncio.to_thread(graph.get_state, config)
     state_before = dict(getattr(graph_state, "values", {}) or {})
+    if response_language is not None:
+        state_before["response_language"] = response_language
+        decision = {**decision, "response_language": response_language}
     expected_payload = _interrupt_payload({}, graph, config)
     decision = _validate_resume_payload(expected_payload, decision)
-    if decision["kind"] == "clarification":
-        answer = str(decision.get("answer") or "").strip()
+    if decision["kind"] in {"clarification", "planning_message"}:
+        answer = str(decision.get("answer") or decision.get("message") or "").strip()
         if not answer:
-            raise ValueError("A non-empty clarification answer is required")
+            raise ValueError("A non-empty planning message is required")
         conversation_id = state_before.get("conversation_id")
         project_id = state_before.get("project_id")
         if isinstance(conversation_id, int) and isinstance(project_id, int):
@@ -290,10 +321,18 @@ async def resume_research(
                     thread_id=thread_id,
                     project_id=project_id,
                     profile_id=profile_id,
-                    kind="clarification_answer",
+                    kind="planning_message",
                     interrupt_id=str(expected_payload.get("id") or ""),
                 ),
             )
+    if decision["kind"] in {"execute_plan", "plan_approval"} and decision.get("approved", True):
+        _update_project_status(session, state_before, "executing")
+        _publish_lifecycle(
+            "research.execution_started",
+            thread_id=thread_id,
+            state=state_before,
+            plan_version=state_before.get("plan_version"),
+        )
     _publish_lifecycle("research.resumed", thread_id=thread_id, state=state_before)
     try:
         result = await asyncio.to_thread(graph.invoke, Command(resume=decision), config)
@@ -309,14 +348,15 @@ async def resume_research(
         raise
     payload = _interrupt_payload(result, graph, config)
     state = _state_without_interrupt(result)
-    _persist_clarification_question(session, thread_id=thread_id, state=state, profile_id=profile_id, payload=payload)
+    _persist_waiting_message(session, thread_id=thread_id, state=state, profile_id=profile_id, payload=payload)
     _update_project_status(session, state, _waiting_status(payload) if payload is not None else "done")
     if payload is not None:
         _publish_lifecycle(
             _waiting_event(payload),
             thread_id=thread_id,
             state=state,
-            option_count=len((state.get("plan") or {}).get("options", [])),
+            plan_version=state.get("plan_version"),
+            step_count=len(state.get("steps") or []),
             interrupt_payload=payload,
         )
     else:
@@ -340,7 +380,13 @@ async def get_active_research(session: Session, *, conversation_id: int) -> Opti
         select(ResearchProject)
         .where(
             ResearchProject.conversation_id == conversation_id,
-            ResearchProject.status.in_(("awaiting_clarification", "awaiting_approval")),
+            ResearchProject.status.in_((
+                "planning",
+                "awaiting_execution",
+                "executing",
+                "awaiting_clarification",
+                "awaiting_approval",
+            )),
         )
         .order_by(ResearchProject.id.desc())
     ).all()
@@ -367,4 +413,172 @@ async def get_active_research(session: Session, *, conversation_id: int) -> Opti
                     "interrupted": True,
                     "interrupt_payload": payload,
                 }
+            if project.status == "executing":
+                return {
+                    "thread_id": thread_id,
+                    "state": {**state, "phase": "executing"},
+                    "interrupted": False,
+                    "interrupt_payload": None,
+                }
     return None
+
+
+def _follow_up_route(
+    message: str,
+    *,
+    route_override: str | None = None,
+    response_language: str = "zh-CN",
+) -> tuple[str, str]:
+    chinese = response_language == "zh-CN"
+    if route_override:
+        return route_override, (
+            "用户已手动更改后续处理方式。"
+            if chinese
+            else "The user manually changed the follow-up route."
+        )
+    lowered = message.lower()
+    research_markers = (
+        "重新研究", "重新执行", "调整计划", "新增事实", "补充数据", "最新数据",
+        "更多来源", "扩大范围", "换个范围", "investigate", "research", "new source",
+    )
+    revision_markers = (
+        "润色", "改写", "格式", "结构", "摘要", "措辞", "翻译", "精简",
+        "排版", "标题", "rewrite", "format", "summarize", "translate",
+    )
+    if any(marker in lowered for marker in research_markers):
+        return "replan", (
+            "请求涉及研究范围、证据或执行计划变化。"
+            if chinese
+            else "The request changes the research scope, evidence, or execution plan."
+        )
+    if any(marker in lowered for marker in revision_markers):
+        return "report_revision", (
+            "请求仅涉及现有报告的表达或结构调整。"
+            if chinese
+            else "The request only changes the wording or structure of the existing report."
+        )
+    return "replan", (
+        "请求可能需要新增事实，默认进入重新规划以避免无证据改写。"
+        if chinese
+        else "The request may require new facts, so it defaults to replanning."
+    )
+
+
+async def follow_up_research(
+    session: Session,
+    *,
+    conversation_id: int,
+    project_id: int,
+    profile_id: int,
+    message: str,
+    response_language: str = "zh-CN",
+    route_override: str | None = None,
+    llm_factory: Optional[Callable[[], Any]] = None,
+) -> dict:
+    project = session.get(ResearchProject, project_id)
+    if project is None or project.conversation_id != conversation_id:
+        raise ValueError("Research project not found in the conversation")
+    route, reason = _follow_up_route(
+        message,
+        route_override=route_override,
+        response_language=response_language,
+    )
+    if route == "replan":
+        run = await start_research(
+            session,
+            conversation_id=conversation_id,
+            profile_id=profile_id,
+            user_message=message,
+            response_language=response_language,
+            llm_factory=llm_factory,
+        )
+        run["state"]["follow_up_route"] = route
+        run["state"]["follow_up_reason"] = reason
+        return {"route": route, "reason": reason, "run": run, "report_id": None}
+
+    latest_report = max(project.reports, key=lambda report: (report.version, report.id), default=None)
+    if latest_report is None:
+        raise ValueError("No report is available to revise")
+
+    followup_id = uuid.uuid4().hex
+    thread_id = f"revision-{project.id}-{followup_id}"
+    meta = _message_meta(
+        thread_id=thread_id,
+        project_id=project.id,
+        profile_id=profile_id,
+        kind="report_revision_request",
+        interrupt_id=followup_id,
+    )
+    _record_message_once(
+        session,
+        conversation_id=conversation_id,
+        role="user",
+        content=message,
+        meta=meta,
+    )
+    _update_project_status(session, {"project_id": project.id}, "revising_report")
+    _publish_lifecycle(
+        "research.report_revision_started",
+        thread_id=thread_id,
+        state={"conversation_id": conversation_id, "project_id": project.id},
+        message=message,
+    )
+
+    evidence = [
+        {"title": source.title, "url": source.url, "snippet": source.snippet}
+        for source in session.scalars(
+            select(Source).where(Source.project_id == project.id).order_by(Source.id)
+        )
+    ]
+    prompt = (
+        "Revise the existing Markdown research report according to the user request. "
+        "Preserve factual claims and citations, use only the supplied report and evidence, "
+        "and return the complete revised Markdown with no surrounding code fence.\n"
+        f"Write the response in {'Simplified Chinese' if response_language == 'zh-CN' else 'English'}.\n"
+        f"Request: {message}\n"
+        f"Evidence: {evidence}\n"
+        f"Existing report:\n{latest_report.content_md}"
+    )
+    try:
+        if llm_factory is not None:
+            llm = llm_factory()
+        else:
+            from app.llm.factory import build_chat_model_from_profile
+
+            llm = build_chat_model_from_profile(session, profile_id)
+        response = await asyncio.to_thread(llm.invoke, prompt)
+        revised = str(getattr(response, "content", response) or "").strip()
+    except Exception:
+        revised = ""
+    if not revised:
+        raise RuntimeError("Report revision failed")
+
+    from app.engine.persistence import persist_report
+
+    report = persist_report(session, project_id=project.id, content_md=revised)
+    _record_message_once(
+        session,
+        conversation_id=conversation_id,
+        role="assistant",
+        content=(
+            "已根据你的要求生成新的报告版本。"
+            if response_language == "zh-CN"
+            else "A new report version has been generated from your request."
+        ),
+        meta=_message_meta(
+            thread_id=thread_id,
+            project_id=project.id,
+            profile_id=profile_id,
+            kind="report_revision_completed",
+            interrupt_id=followup_id,
+        ),
+    )
+    _update_project_status(session, {"project_id": project.id}, "done")
+    _publish_lifecycle(
+        "research.report_revised",
+        thread_id=thread_id,
+        state={"conversation_id": conversation_id, "project_id": project.id},
+        report_id=report.id,
+        report_version=report.version,
+    )
+    return {"route": route, "reason": reason, "run": None, "report_id": report.id}

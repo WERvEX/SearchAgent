@@ -8,7 +8,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from app.core.events import get_event_bus
-from app.db.models import Source
+from app.db.models import Source, Step
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
 from app.services.settings_service import get_preference
@@ -68,21 +68,35 @@ def _extract_objective(response_text: str, user_message: str) -> str | None:
     return None
 
 
-def _fallback_plan(objective: str) -> dict:
+def _fallback_plan(objective: str, *, chinese: bool = True) -> dict:
     return {
-        "summary": f"研究计划：{objective}",
-        "options": [
-            {"id": "A", "label": "全面综述"},
-            {"id": "B", "label": "聚焦最新进展"},
-        ],
+        "summary": f"研究计划：{objective}" if chinese else f"Research plan: {objective}",
+        "steps": _fallback_steps(chinese=chinese),
     }
 
 
-def _fallback_steps() -> list[dict]:
+def _fallback_steps(*, chinese: bool = True) -> list[dict]:
+    if not chinese:
+        return [
+            {"seq": 1, "title": "Collect sources", "status": "pending"},
+            {"seq": 2, "title": "Synthesize evidence", "status": "pending"},
+        ]
     return [
         {"seq": 1, "title": "检索资料", "status": "pending"},
         {"seq": 2, "title": "整理证据", "status": "pending"},
     ]
+
+
+def _is_chinese(state: ResearchState) -> bool:
+    return state.get("response_language", "zh-CN") == "zh-CN"
+
+
+def _response_language_instruction(state: ResearchState) -> str:
+    language = "Simplified Chinese" if _is_chinese(state) else "English"
+    return (
+        f"The application language is {language}. Write every user-visible message, "
+        f"plan summary, step title, step description, and report section in {language}."
+    )
 
 
 def _run_async(value: Any) -> Any:
@@ -250,8 +264,8 @@ def _mark_acceptance_criteria(steps: list[dict], findings: list[dict]) -> list[d
     return updated_steps
 
 
-def _report_references(findings: list[dict]) -> list[str]:
-    lines = ["", "## 参考来源", ""]
+def _report_references(findings: list[dict], *, chinese: bool = True) -> list[str]:
+    lines = ["", "## 参考来源" if chinese else "## References", ""]
     for idx, finding in enumerate(findings, start=1):
         title = finding.get("title") or finding.get("url") or f"来源 {idx}"
         url = finding.get("url", "")
@@ -261,10 +275,11 @@ def _report_references(findings: list[dict]) -> list[str]:
 
 def _build_report_markdown(state: ResearchState, analysis_md: str | None = None) -> str:
     findings = state.get("findings", [])
+    chinese = _is_chinese(state)
     lines = [
-        "# 研究报告",
+        "# 研究报告" if chinese else "# Research Report",
         "",
-        f"## 研究目标",
+        "## 研究目标" if chinese else "## Research Objective",
         "",
         state.get("objective", ""),
         "",
@@ -274,9 +289,9 @@ def _build_report_markdown(state: ResearchState, analysis_md: str | None = None)
     if analysis_md:
         lines.extend([analysis_md, ""])
     else:
-        lines.extend(["## 主要发现", ""])
+        lines.extend(["## 主要发现" if chinese else "## Key Findings", ""])
         if not findings:
-            lines.append("暂无可引用发现。")
+            lines.append("暂无可引用发现。" if chinese else "No citable findings are available.")
         for idx, finding in enumerate(findings, start=1):
             title = finding.get("title") or finding.get("url") or f"来源 {idx}"
             url = finding.get("url") or ""
@@ -285,15 +300,15 @@ def _build_report_markdown(state: ResearchState, analysis_md: str | None = None)
             lines.append(f"- {linked_title} [^{idx}] {snippet}")
 
     if findings:
-        lines.extend(_report_references(findings))
+        lines.extend(_report_references(findings, chinese=chinese))
 
     return "\n".join(lines).strip() + "\n"
 
 
 def _normalize_report_analysis(content: str, source_count: int) -> str | None:
     content = str(content or "").strip()
-    content = re.sub(r"^#\s+研究报告\s*", "", content)
-    content = re.split(r"\n##\s*参考来源\b", content, maxsplit=1)[0].strip()
+    content = re.sub(r"^#\s+(?:研究报告|Research Report)\s*", "", content, flags=re.IGNORECASE)
+    content = re.split(r"\n##\s*(?:参考来源|References)\b", content, maxsplit=1, flags=re.IGNORECASE)[0].strip()
 
     def _normalize_citation(match: re.Match[str]) -> str:
         source_id = int(match.group(1))
@@ -319,7 +334,7 @@ def _synthesize_report(ctx: EngineContext, state: ResearchState) -> str | None:
         for idx, finding in enumerate(findings, start=1)
     ]
     base_prompt = (
-        "Write the analytical body of a Chinese research report in Markdown. "
+        f"Write the analytical body of a research report in Markdown. {_response_language_instruction(state)} "
         "Use only the supplied evidence; do not invent facts or URLs. Synthesize the "
         "evidence instead of listing or repeating source snippets. Clearly distinguish "
         "reported facts, reasonable inferences, and unresolved uncertainties. Include "
@@ -367,122 +382,244 @@ def make_nodes(ctx: EngineContext):
             }
         )
 
-    def clarify_intent(state: ResearchState) -> dict:
-        if state.get("objective"):
-            return {}
+    def plan_conversation(state: ResearchState) -> dict:
+        from app.engine.persistence import persist_plan_version
 
-        user_message = _latest_user_message(state.get("messages", []))
-        llm = _get_llm(ctx)
+        latest_user = _latest_user_message(state.get("messages", []))
+        current_objective = str(state.get("objective") or "").strip()
+        previous_plan = state.get("plan") or {}
         prompt = (
-            "Clarify the user's research objective.\n"
+            "You are a research planning assistant. Clarify the objective in a planning-only "
+            "chat, then return one JSON "
+            "object and no prose. If important scope is missing or the user is asking for an "
+            "explanation, return {\"ready\": false, \"message\": \"...\", \"objective\": \"...\"}. "
+            "When the work is decision-complete, return {\"ready\": true, \"message\": \"...\", "
+            "\"objective\": \"...\", \"summary\": \"...\", \"steps\": [{\"seq\": 1, "
+            "\"title\": \"...\", \"description\": \"...\", \"status\": \"pending\"}]}. "
+            "Ask only questions that materially change the research. A user message after a "
+            "previous plan requests discussion or revision; produce a new ready plan only when "
+            "their concern has been incorporated.\n"
+            f"{_response_language_instruction(state)}\n"
             f"Conversation:\n{_conversation_context(state.get('messages', []))}\n"
-            "If the objective is clear, respond with a line starting with OBJECTIVE: "
-            "followed by a concise research objective. Otherwise ask a follow-up question."
+            f"Current objective: {current_objective}\n"
+            f"Previous plan: {json.dumps(previous_plan, ensure_ascii=False)}"
         )
-        response_text = _llm_content(llm.invoke(prompt))
-        objective = _extract_objective(response_text, user_message)
-        if objective:
-            return {"objective": objective, "clarification_question": None}
-        return {"clarification_question": response_text.strip()}
 
-    def await_clarification(state: ResearchState) -> dict:
-        question = str(state.get("clarification_question") or "请补充研究目标的具体范围。")
-        response = interrupt({"kind": "clarification", "message": question})
-        if not isinstance(response, dict) or response.get("kind") != "clarification":
-            raise ValueError("Expected a clarification response")
-        answer = str(response.get("answer") or "").strip()
-        if not answer:
-            raise ValueError("A non-empty clarification answer is required")
-        return {
-            "messages": [
-                {"role": "assistant", "content": question},
-                {"role": "user", "content": answer},
-            ],
-            "clarification_question": None,
-        }
-
-    def generate_plan(state: ResearchState) -> dict:
-        objective = state["objective"]
-        plan = None
-        feedback = str(state.get("replan_feedback") or "").strip()
+        llm = _get_llm(ctx)
         try:
-            llm = _get_llm(ctx)
-            prompt = (
-                "Generate a research plan as JSON with keys summary (string) and options "
-                "(array of {id, label}). Options must be mutually exclusive alternative "
-                "approaches, and every option must cover the complete objective. Do not "
-                "represent report sections or sequential research steps as options.\n"
-                f"Research topic: {objective}"
-            )
-            if feedback:
-                prompt += f"\nThe user requested a revision with this feedback: {feedback}"
             response_text = _llm_content(llm.invoke(prompt))
-            plan = _parse_json_content(response_text)
-            if isinstance(plan, dict) and "summary" in plan and "options" in plan:
-                publish_progress(
-                    "research.plan_ready",
-                    state,
-                    option_count=len(plan.get("options", [])),
-                )
-                return {"plan": plan, "replan_feedback": None}
+            parsed = _parse_json_content(response_text)
         except Exception:
-            pass
-        plan = _fallback_plan(objective)
+            parsed = None
+            response_text = locals().get("response_text", "")
+
+        legacy_plan = (
+            isinstance(parsed, dict)
+            and isinstance(parsed.get("summary"), str)
+            and isinstance(parsed.get("options"), list)
+        )
+
+        if isinstance(parsed, dict) and parsed.get("ready") is False:
+            message = str(parsed.get("message") or (
+                "请补充研究目标的具体范围。" if _is_chinese(state)
+                else "Please clarify the specific scope of the research objective."
+            )).strip()
+            objective = str(parsed.get("objective") or current_objective).strip()
+            publish_progress("research.planning_message", state, message=message)
+            return {
+                "objective": objective,
+                "planner_message": message,
+                "plan_ready": False,
+                "approved": False,
+            }
+
+        objective = (
+            str(parsed.get("objective") or "").strip()
+            if isinstance(parsed, dict)
+            else ""
+        ) or current_objective or _extract_objective(response_text, latest_user)
+        if legacy_plan and not objective:
+            objective = latest_user.strip()
+        if not objective:
+            message = response_text.strip() or (
+                "请补充研究目标、范围、时间跨度或期望输出。" if _is_chinese(state)
+                else "Please clarify the objective, scope, time horizon, or expected output."
+            )
+            publish_progress("research.planning_message", state, message=message)
+            return {
+                "planner_message": message,
+                "plan_ready": False,
+                "approved": False,
+            }
+
+        if isinstance(parsed, dict) and parsed.get("ready") is True:
+            steps = parsed.get("steps")
+            plan = {
+                "summary": str(parsed.get("summary") or (
+                    f"研究计划：{objective}" if _is_chinese(state)
+                    else f"Research plan: {objective}"
+                )),
+                "steps": steps if isinstance(steps, list) and steps else _fallback_steps(chinese=_is_chinese(state)),
+            }
+            message = str(parsed.get("message") or (
+                "计划已经准备完成，可以开始执行。" if _is_chinese(state)
+                else "The plan is ready to execute."
+            ))
+        elif legacy_plan:
+            plan = {
+                "summary": str(parsed["summary"]),
+                "steps": _fallback_steps(chinese=_is_chinese(state)),
+                "options": parsed["options"],
+            }
+            message = "计划已经准备完成，可以开始执行。" if _is_chinese(state) else "The plan is ready to execute."
+        else:
+            plan = _fallback_plan(objective, chinese=_is_chinese(state))
+            message = "计划已经准备完成，可以开始执行。" if _is_chinese(state) else "The plan is ready to execute."
+
+        next_state = {
+            **state,
+            "objective": objective,
+            "plan": plan,
+            "steps": plan["steps"],
+        }
+        version = persist_plan_version(ctx.session, next_state)
         publish_progress(
             "research.plan_ready",
             state,
-            option_count=len(plan.get("options", [])),
+            plan_version=version,
+            step_count=len(plan["steps"]),
         )
-        return {"plan": plan, "replan_feedback": None}
-
-    def await_plan_approval(state: ResearchState) -> dict:
-        decision = interrupt({"kind": "plan_approval", "plan": state.get("plan"), "message": "请确认或选择方案"})
-        if not isinstance(decision, dict):
-            raise ValueError("Expected a plan decision")
-        if decision.get("kind") not in (None, "plan_approval"):
-            raise ValueError("Expected a plan approval response")
-        if not decision.get("approved"):
-            return {
-                "approved": False,
-                "replan_feedback": str(decision.get("feedback") or "").strip(),
-            }
-
-        chosen_option = decision.get("chosen_option")
-        option_ids = {
-            str(option.get("id"))
-            for option in (state.get("plan") or {}).get("options", [])
-            if isinstance(option, dict) and option.get("id") is not None
-        }
-        if not isinstance(chosen_option, str) or chosen_option not in option_ids:
-            raise ValueError("A valid plan option must be selected before approval")
         return {
-            "approved": True,
-            "plan": {**state.get("plan", {}), "chosen_option": chosen_option},
+            "objective": objective,
+            "plan": plan,
+            "steps": plan["steps"],
+            "plan_version": version,
+            "plan_ready": True,
+            "planner_message": message,
+            "approved": False,
             "replan_feedback": None,
         }
 
+    def persist_step_status(state: ResearchState, step: dict, status: str) -> None:
+        project_id = state.get("project_id")
+        step_seq = step.get("seq")
+        if not isinstance(project_id, int) or not isinstance(step_seq, int):
+            return
+        persisted = (
+            ctx.session.query(Step)
+            .filter(Step.project_id == project_id, Step.seq == step_seq)
+            .one_or_none()
+        )
+        if persisted is not None:
+            persisted.status = status
+            ctx.session.commit()
+
+    # Compatibility helpers retained for callers that exercise individual v1 nodes.
+    def clarify_intent(state: ResearchState) -> dict:
+        if state.get("objective"):
+            return {}
+        user_message = _latest_user_message(state.get("messages", []))
+        response_text = _llm_content(_get_llm(ctx).invoke(
+            "Clarify the user's research objective.\n"
+            f"Conversation:\n{_conversation_context(state.get('messages', []))}\n"
+            "If clear, respond with OBJECTIVE: followed by the objective."
+        ))
+        objective = _extract_objective(response_text, user_message)
+        return {"objective": objective} if objective else {"clarification_question": response_text.strip()}
+
+    def generate_plan(state: ResearchState) -> dict:
+        response = _parse_json_content(_llm_content(_get_llm(ctx).invoke(
+            "Generate a research plan as JSON with keys summary and options.\n"
+            f"Research topic: {state.get('objective', '')}"
+        )))
+        return {"plan": response}
+
     def derive_steps(state: ResearchState) -> dict:
-        objective = state["objective"]
-        plan = state.get("plan") or {}
-        try:
-            llm = _get_llm(ctx)
-            prompt = (
-                "Derive research steps as a JSON array of objects with keys "
-                "seq (int), title (string), description (string), status (string).\n"
-                f"Research topic: {objective}\n"
-                f"Selected approach: {json.dumps(plan, ensure_ascii=False)}"
-            )
-            response_text = _llm_content(llm.invoke(prompt))
-            steps = _parse_json_content(response_text)
-            if isinstance(steps, list) and steps:
-                return {"steps": steps}
-        except Exception:
-            pass
-        return {"steps": _fallback_steps()}
+        response = _parse_json_content(_llm_content(_get_llm(ctx).invoke(
+            "Derive research steps as a JSON array with seq, title, description and status.\n"
+            f"Research topic: {state.get('objective', '')}"
+        )))
+        return {"steps": response}
+
+    def _planning_interrupt(state: ResearchState, *, ready: bool) -> dict:
+        payload = {
+            "kind": "plan_ready" if ready else "planning_input",
+            "message": state.get("planner_message") or (
+                (
+                    "计划已经准备完成，可以开始执行。"
+                    if _is_chinese(state)
+                    else "The plan is ready to execute."
+                )
+                if ready
+                else (
+                    "请继续补充研究细节。"
+                    if _is_chinese(state)
+                    else "Please add more research details."
+                )
+            ),
+        }
+        if ready:
+            payload.update({
+                "plan": state.get("plan"),
+                "plan_version": state.get("plan_version"),
+            })
+        response = interrupt(payload)
+        if not isinstance(response, dict):
+            raise ValueError("Expected a planning response")
+
+        kind = response.get("kind")
+        if kind == "clarification":
+            kind = "planning_message"
+            response = {**response, "message": response.get("answer")}
+        elif kind in (None, "plan_approval"):
+            if response.get("approved"):
+                kind = "execute_plan"
+                response = {**response, "plan_version": state.get("plan_version")}
+            else:
+                kind = "planning_message"
+                response = {**response, "message": response.get("feedback")}
+
+        if kind == "planning_message":
+            message = str(response.get("message") or "").strip()
+            if not message:
+                raise ValueError("A non-empty planning message is required")
+            return {
+                "messages": [{"role": "user", "content": message}],
+                "response_language": response.get("response_language") or state.get("response_language"),
+                "planner_message": None,
+                "plan_ready": False,
+                "approved": False,
+                "replan_feedback": message,
+            }
+        if kind == "execute_plan":
+            requested_version = response.get("plan_version")
+            if requested_version != state.get("plan_version"):
+                raise ValueError("The selected plan version is no longer current")
+            return {
+                "approved": True,
+                "response_language": response.get("response_language") or state.get("response_language"),
+            }
+        raise ValueError("Expected planning_message or execute_plan")
+
+    def await_planning_input(state: ResearchState) -> dict:
+        return _planning_interrupt(state, ready=False)
+
+    def await_plan_ready(state: ResearchState) -> dict:
+        return _planning_interrupt(state, ready=True)
 
     def execute_research(state: ResearchState) -> dict:
         from app.tools import registry
 
+        steps = [dict(item) for item in state.get("steps", [])]
+        if steps:
+            steps[0]["status"] = "running"
+            persist_step_status(state, steps[0], "running")
+            publish_progress(
+                "research.step_started",
+                state,
+                step_seq=steps[0].get("seq"),
+                step_title=steps[0].get("title"),
+            )
         max_sources = _get_max_sources(ctx)
         tool_result = _run_async(registry.get_research_tools(ctx.session))
         tools = tool_result.get("tools", [])
@@ -511,7 +648,13 @@ def make_nodes(ctx: EngineContext):
                 continue
 
             args = _tool_call_args(call)
+            publish_progress(
+                "research.tool_started",
+                state,
+                tool_name=name,
+            )
             result = _invoke_tool(tool, args)
+            collected_before = len(findings)
             for source in _iter_source_items(result, tool_name=name, args=args):
                 if len(findings) >= max_sources:
                     break
@@ -525,6 +668,21 @@ def make_nodes(ctx: EngineContext):
                         tool_name=name,
                     )
                 )
+                ctx.session.commit()
+                publish_progress(
+                    "research.source_collected",
+                    state,
+                    source_count=len(findings),
+                    source_title=source["title"],
+                    source_url=source["url"],
+                    tool_name=name,
+                )
+            publish_progress(
+                "research.tool_completed",
+                state,
+                tool_name=name,
+                source_count=len(findings) - collected_before,
+            )
 
         ctx.session.commit()
         if not findings:
@@ -538,7 +696,25 @@ def make_nodes(ctx: EngineContext):
             source_count=len(findings),
             tool_count=len(tools_by_name),
         )
-        return {"findings": findings}
+        for step in steps:
+            if step.get("status") != "running":
+                step["status"] = "running"
+                persist_step_status(state, step, "running")
+                publish_progress(
+                    "research.step_started",
+                    state,
+                    step_seq=step.get("seq"),
+                    step_title=step.get("title"),
+                )
+            step["status"] = "completed"
+            persist_step_status(state, step, "completed")
+            publish_progress(
+                "research.step_completed",
+                state,
+                step_seq=step.get("seq"),
+                step_title=step.get("title"),
+            )
+        return {"findings": findings, "steps": steps}
 
     def aggregate_evidence(state: ResearchState) -> dict:
         findings = _dedupe_findings(state.get("findings", []))
@@ -559,10 +735,11 @@ def make_nodes(ctx: EngineContext):
         return {"report_md": report_md, "report_id": report.id}
 
     return {
+        "plan_conversation": plan_conversation,
+        "await_planning_input": await_planning_input,
+        "await_plan_ready": await_plan_ready,
         "clarify_intent": clarify_intent,
-        "await_clarification": await_clarification,
         "generate_plan": generate_plan,
-        "await_plan_approval": await_plan_approval,
         "derive_steps": derive_steps,
         "execute_research": execute_research,
         "aggregate_evidence": aggregate_evidence,

@@ -101,6 +101,43 @@ def test_derive_steps_parses_json(session):
     assert out["steps"][0]["status"] == "pending"
 
 
+def test_planning_prompt_requires_the_selected_interface_language(session):
+    from app.engine.context import EngineContext
+    from app.engine.nodes import make_nodes
+
+    prompts = []
+
+    class _LanguageLLM:
+        def invoke(self, prompt):
+            prompts.append(str(prompt))
+            return type("_R", (), {
+                "content": (
+                    '{"ready": false, "message": "请说明地区范围。", '
+                    '"objective": "研究市场趋势"}'
+                )
+            })()
+
+    nodes = make_nodes(
+        EngineContext(session=session, profile_id=1, llm_factory=lambda: _LanguageLLM())
+    )
+    out = nodes["plan_conversation"]({
+        "run_id": "thread-language",
+        "conversation_id": 1,
+        "project_id": 1,
+        "response_language": "zh-CN",
+        "messages": [{"role": "user", "content": "研究市场趋势"}],
+        "objective": "",
+        "plan": None,
+        "approved": False,
+        "steps": [],
+        "findings": [],
+        "report_md": None,
+    })
+
+    assert "application language is Simplified Chinese" in prompts[0]
+    assert out["planner_message"] == "请说明地区范围。"
+
+
 def test_clarify_propagates_llm_configuration_errors(session):
     from app.engine.context import EngineContext
     from app.engine.nodes import make_nodes

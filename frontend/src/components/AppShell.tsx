@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { History, Settings, Telescope } from "lucide-react";
+import { Activity, History, PanelLeft, Settings, Telescope, X } from "lucide-react";
 import { useI18n } from "../i18n/I18nProvider";
 
 export type AppPanel = "research" | "settings";
@@ -10,9 +10,27 @@ export type AppShellProps = {
   right: ReactNode;
   activePanel: AppPanel;
   onPanelChange: (panel: AppPanel) => void;
+  historyCollapsed?: boolean;
+  mobileHistoryOpen?: boolean;
+  detailsOpen?: boolean;
+  onToggleHistory?: () => void;
+  onCloseHistory?: () => void;
+  onToggleDetails?: () => void;
 };
 
-export function AppShell({ left, main, right, activePanel, onPanelChange }: AppShellProps) {
+export function AppShell({
+  left,
+  main,
+  right,
+  activePanel,
+  onPanelChange,
+  historyCollapsed = false,
+  mobileHistoryOpen = false,
+  detailsOpen = false,
+  onToggleHistory,
+  onCloseHistory,
+  onToggleDetails,
+}: AppShellProps) {
   const { locale, setLocale, t } = useI18n();
   const languageButtonClass = (active: boolean) =>
     `inline-flex h-8 min-w-9 items-center justify-center rounded-md px-2 text-xs font-medium ${
@@ -22,12 +40,20 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
     }`;
 
   return (
-    <div className="app-shell min-h-screen bg-zinc-50 text-zinc-950 xl:h-screen xl:overflow-hidden">
+    <div className="app-shell h-screen overflow-hidden bg-zinc-50 text-zinc-950">
       <header
         data-testid="app-shell-header"
-        className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3 xl:h-14 xl:min-h-0 xl:flex-nowrap xl:py-0"
+        className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3 lg:h-14 lg:min-h-0 lg:flex-nowrap lg:py-0"
       >
         <div className="flex min-w-0 items-center gap-2 font-semibold">
+          <button
+            type="button"
+            className={`nav-button px-2 ${historyCollapsed ? "" : "lg:hidden"}`}
+            aria-label={t("conversation.open")}
+            onClick={onToggleHistory}
+          >
+            <PanelLeft className="h-4 w-4" aria-hidden="true" />
+          </button>
           <Telescope className="h-5 w-5 text-teal-700" aria-hidden="true" />
           <span>SearchAgent</span>
         </div>
@@ -41,6 +67,12 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
             <History className="h-4 w-4" aria-hidden="true" />
             <span>{t("shell.research")}</span>
           </button>
+          {activePanel === "research" ? (
+            <button type="button" className={detailsOpen ? "nav-button-active" : "nav-button"} aria-pressed={detailsOpen} onClick={onToggleDetails}>
+              <Activity className="h-4 w-4" aria-hidden="true" />
+              <span>{t("progress.title")}</span>
+            </button>
+          ) : null}
           <button
             type="button"
             className={activePanel === "settings" ? "nav-button-active" : "nav-button"}
@@ -74,27 +106,46 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
       </header>
       <div
         data-testid="app-shell-layout"
-        className="grid flex-1 grid-cols-1 gap-4 p-4 xl:h-[calc(100vh-3.5rem)] xl:min-h-0 xl:grid-cols-[280px_minmax(0,1fr)_340px] xl:gap-0 xl:p-0"
+        className={`grid min-h-0 flex-1 grid-cols-1 lg:h-[calc(100vh-3.5rem)] ${
+          activePanel === "settings"
+            ? historyCollapsed
+              ? "lg:grid-cols-[56px_minmax(0,1fr)_340px]"
+              : "lg:grid-cols-[280px_minmax(0,1fr)_340px]"
+            : historyCollapsed
+              ? "lg:grid-cols-[56px_minmax(0,1fr)]"
+              : "lg:grid-cols-[280px_minmax(0,1fr)]"
+        }`}
       >
         <aside
           data-testid="app-shell-history"
-          className="app-shell-pane min-w-0 bg-white xl:border-r xl:border-zinc-200"
+          className={`${mobileHistoryOpen ? "fixed" : "hidden"} inset-y-0 left-0 z-40 w-[280px] min-w-0 bg-white shadow-xl lg:static lg:z-auto lg:block lg:w-auto lg:border-r lg:border-zinc-200 lg:shadow-none`}
         >
           {left}
         </aside>
         <main
           data-testid="app-shell-main"
-          className="app-shell-pane app-shell-main min-w-0 bg-zinc-50"
+          className="min-h-0 min-w-0 overflow-hidden bg-zinc-50"
         >
           {main}
         </main>
+        {activePanel === "settings" ? (
+          <aside data-testid="app-shell-sidepanel" className="hidden min-w-0 overflow-hidden border-l border-zinc-200 bg-white lg:block">
+            {right}
+          </aside>
+        ) : null}
+      </div>
+      {activePanel === "research" && detailsOpen ? (
         <aside
           data-testid="app-shell-sidepanel"
-          className="app-shell-pane order-3 min-w-0 bg-white xl:order-3 xl:border-l xl:border-zinc-200"
+          className="fixed inset-y-0 right-0 z-50 w-full max-w-[380px] overflow-hidden border-l border-zinc-200 bg-white shadow-2xl"
         >
+          <button type="button" className="absolute right-2 top-2 z-10 rounded-md p-2 hover:bg-zinc-100" aria-label="Close details" onClick={onToggleDetails}>
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
           {right}
         </aside>
-      </div>
+      ) : null}
+      {mobileHistoryOpen ? <button type="button" aria-label="Close history overlay" className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={onCloseHistory} /> : null}
     </div>
   );
 }

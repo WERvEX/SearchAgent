@@ -163,7 +163,15 @@ def test_stream_events_filters_replay_by_thread_and_conversation_id(app_home, mo
     request = Request({"type": "http", "method": "GET", "path": "/events", "headers": [(b"last-event-id", b"1")]})
     response = events_api.stream_events(request, thread_id="thread-1", conversation_id=4)
 
-    assert _read_sse_chunk(response) == (
+    async def read_replay():
+        iterator = response.body_iterator
+        try:
+            assert await anext(iterator) == ": connected\n\n"
+            return await anext(iterator)
+        finally:
+            await iterator.aclose()
+
+    assert asyncio.run(read_replay()) == (
         f'id: {matching["id"]}\nevent: research.plan_ready\ndata: {{"thread_id":"thread-1","conversation_id":4}}\n\n'
     )
     assert not bus._subscribers
@@ -186,6 +194,7 @@ def test_stream_events_releases_idle_subscription_after_disconnect(app_home, mon
         response = events_api.stream_events(DisconnectAfterSubscription(), conversation_id=4)
         iterator = response.body_iterator
         try:
+            assert await anext(iterator) == ": connected\n\n"
             with pytest.raises(StopAsyncIteration):
                 await anext(iterator)
         finally:

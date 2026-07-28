@@ -61,15 +61,23 @@ def test_research_start_and_resume_delegate_to_runner(app_home, monkeypatch):
     from app.engine import runner
     from app.main import create_app
 
-    async def fake_start(session, *, conversation_id, profile_id, user_message):
+    async def fake_start(
+        session, *, conversation_id, profile_id, user_message, response_language
+    ):
         return {
             "thread_id": "thread-1",
-            "state": {"conversation_id": conversation_id, "objective": user_message},
+            "state": {
+                "conversation_id": conversation_id,
+                "objective": user_message,
+                "response_language": response_language,
+            },
             "interrupted": True,
             "interrupt_payload": {"plan": {"summary": "p"}},
         }
 
-    async def fake_resume(session, *, thread_id, decision, profile_id=1):
+    async def fake_resume(
+        session, *, thread_id, decision, profile_id=1, response_language=None
+    ):
         return {
             "thread_id": thread_id,
             "state": {"approved": decision["approved"], "report_md": "# R"},
@@ -155,3 +163,54 @@ def test_research_resume_validates_clarification_and_active_endpoint(app_home, m
     active = client.get(f"/research/active/{conv['id']}")
     assert active.status_code == 200
     assert active.json()["interrupt_payload"]["kind"] == "clarification"
+
+
+def test_follow_up_and_execution_detail_endpoints(app_home, monkeypatch):
+    from app.db import session as db
+    from app.db.models import Conversation, LLMProfile, Report, ResearchProject, Source, Step
+    from app.engine import runner
+    from app.main import create_app
+
+    async def fake_follow_up(session, **kwargs):
+        return {
+            "route": kwargs.get("route_override") or "report_revision",
+            "reason": "Formatting only",
+            "run": None,
+            "report_id": 9,
+        }
+
+    monkeypatch.setattr(runner, "follow_up_research", fake_follow_up)
+    client = TestClient(create_app())
+    with db.SessionLocal() as session:
+        conversation = Conversation(title="c")
+        profile = LLMProfile(name="p", provider="openai", model="m")
+        session.add_all([conversation, profile])
+        session.flush()
+        project = ResearchProject(
+            conversation_id=conversation.id,
+            topic="t",
+            objective="o",
+            status="done",
+        )
+        session.add(project)
+        session.flush()
+        session.add(Step(project_id=project.id, seq=1, title="Search", status="pending"))
+        session.add(Source(project_id=project.id, url="https://example.com", title="Example", tool_name="search"))
+        session.add(Report(project_id=project.id, version=1, format="markdown", content_md="# Report"))
+        session.commit()
+        ids = conversation.id, project.id, profile.id
+
+    response = client.post("/research/follow-up", json={
+        "conversation_id": ids[0],
+        "project_id": ids[1],
+        "profile_id": ids[2],
+        "message": "Rewrite the summary",
+    })
+    assert response.status_code == 200
+    assert response.json()["route"] == "report_revision"
+
+    execution = client.get(f"/research/projects/{ids[1]}/execution")
+    assert execution.status_code == 200
+    assert execution.json()["steps"][0]["title"] == "Search"
+    assert execution.json()["steps"][0]["status"] == "completed"
+    assert execution.json()["sources"][0]["url"] == "https://example.com"

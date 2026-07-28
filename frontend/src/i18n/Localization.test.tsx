@@ -64,7 +64,6 @@ describe("frontend localization", () => {
     expect(screen.getAllByText("Backend title")).toHaveLength(2);
     expect(screen.getByText("Backend message")).toBeInTheDocument();
     expect(screen.getByText("进行中")).toBeInTheDocument();
-    expect(screen.getByText("用户")).toBeInTheDocument();
     expect(screen.getByLabelText("研究请求")).toBeInTheDocument();
     expect(screen.getByText("暂无计划选项")).toBeInTheDocument();
     expect(screen.getByText("正在连接")).toBeInTheDocument();

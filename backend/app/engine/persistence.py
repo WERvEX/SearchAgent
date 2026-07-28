@@ -4,12 +4,33 @@ from sqlalchemy.orm import Session
 from app.db.models import AcceptanceCriterion, Plan, Report, Step
 
 
+def persist_plan_version(session: Session, state: dict) -> int:
+    project_id = state["project_id"]
+    plan = state.get("plan") or {}
+    version = (
+        session.scalar(select(func.max(Plan.version)).where(Plan.project_id == project_id))
+        or 0
+    ) + 1
+    session.add(
+        Plan(
+            project_id=project_id,
+            version=version,
+            summary=str(plan.get("summary", "")),
+            options_json=state.get("steps") or plan.get("steps") or plan.get("options") or [],
+            chosen_option=None,
+        )
+    )
+    session.commit()
+    sync_plan_and_steps(session, {**state, "plan_version": version})
+    return version
+
+
 def sync_plan_and_steps(session: Session, state: dict) -> None:
     """Persist the current graph plan and steps into business tables."""
     project_id = state["project_id"]
     plan = state.get("plan") or {}
 
-    if plan:
+    if plan and not state.get("plan_version"):
         version = (
             session.scalar(
                 select(func.max(Plan.version)).where(Plan.project_id == project_id)
@@ -21,7 +42,7 @@ def sync_plan_and_steps(session: Session, state: dict) -> None:
                 project_id=project_id,
                 version=version,
                 summary=str(plan.get("summary", "")),
-                options_json=plan.get("options"),
+                options_json=state.get("steps") or plan.get("steps") or plan.get("options"),
                 chosen_option=plan.get("chosen_option"),
             )
         )

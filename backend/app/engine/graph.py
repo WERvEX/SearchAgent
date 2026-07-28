@@ -5,12 +5,12 @@ from app.engine.nodes import make_nodes
 from app.engine.state import ResearchState
 
 
-def _route_after_clarify(state: ResearchState) -> str:
-    return "generate_plan" if state.get("objective") else "await_clarification"
+def _route_after_planner(state: ResearchState) -> str:
+    return "await_plan_ready" if state.get("plan_ready") else "await_planning_input"
 
 
-def _route_after_plan_approval(state: ResearchState) -> str:
-    return "derive_steps" if state.get("approved") else "generate_plan"
+def _route_after_planning_input(state: ResearchState) -> str:
+    return "execute_research" if state.get("approved") else "plan_conversation"
 
 
 def compile_research_graph(ctx: EngineContext, *, checkpointer=None):
@@ -20,18 +20,19 @@ def compile_research_graph(ctx: EngineContext, *, checkpointer=None):
     for name, fn in nodes.items():
         builder.add_node(name, fn)
 
-    builder.add_edge(START, "clarify_intent")
-    builder.add_conditional_edges("clarify_intent", _route_after_clarify, {
-        "generate_plan": "generate_plan",
-        "await_clarification": "await_clarification",
+    builder.add_edge(START, "plan_conversation")
+    builder.add_conditional_edges("plan_conversation", _route_after_planner, {
+        "await_plan_ready": "await_plan_ready",
+        "await_planning_input": "await_planning_input",
     })
-    builder.add_edge("await_clarification", "clarify_intent")
-    builder.add_edge("generate_plan", "await_plan_approval")
-    builder.add_conditional_edges("await_plan_approval", _route_after_plan_approval, {
-        "generate_plan": "generate_plan",
-        "derive_steps": "derive_steps",
+    builder.add_conditional_edges("await_planning_input", _route_after_planning_input, {
+        "plan_conversation": "plan_conversation",
+        "execute_research": "execute_research",
     })
-    builder.add_edge("derive_steps", "execute_research")
+    builder.add_conditional_edges("await_plan_ready", _route_after_planning_input, {
+        "plan_conversation": "plan_conversation",
+        "execute_research": "execute_research",
+    })
     builder.add_edge("execute_research", "aggregate_evidence")
     builder.add_edge("aggregate_evidence", "write_report")
     builder.add_edge("write_report", END)

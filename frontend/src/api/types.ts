@@ -4,6 +4,10 @@ export const KNOWN_CONVERSATION_STATUSES = [
   "active",
   "awaiting_clarification",
   "awaiting_approval",
+  "planning",
+  "awaiting_execution",
+  "executing",
+  "revising_report",
   "completed",
   "failed",
 ] as const;
@@ -24,6 +28,7 @@ export type ConversationDetail = ConversationRead & {
     role: string;
     content: string;
     meta: Record<string, unknown> | null;
+    created_at?: string;
   }>;
   projects: Array<{
     id: number;
@@ -33,7 +38,25 @@ export type ConversationDetail = ConversationRead & {
     created_at: string;
     latest_report_id: number | null;
     latest_report_version: number | null;
+    plans?: PlanArtifact[];
+    reports?: Array<{ id: number; project_id?: number; version: number; created_at: string }>;
   }>;
+};
+
+export type PlanStep = {
+  seq: number;
+  title: string;
+  description?: string;
+  status?: string;
+};
+
+export type PlanArtifact = {
+  id?: number;
+  project_id?: number;
+  version: number;
+  summary: string;
+  steps: PlanStep[];
+  created_at?: string;
 };
 
 export type ResearchRunResponse = {
@@ -47,6 +70,10 @@ export type ResearchRunPhase =
   | "idle"
   | "starting"
   | "active"
+  | "planning"
+  | "awaiting_execution"
+  | "executing"
+  | "revising_report"
   | "awaiting_clarification"
   | "awaiting_approval"
   | "resuming"
@@ -106,9 +133,39 @@ export type ReportRead = {
   created_at: string;
 };
 
+export type ProjectExecutionDetail = {
+  project_id: number;
+  status: string;
+  steps: Array<PlanStep & { id: number; result_summary?: string | null }>;
+  sources: Array<{
+    id: number;
+    title: string;
+    url: string;
+    snippet: string | null;
+    tool_name: string;
+  }>;
+  reports: Array<{ id: number; version: number; created_at: string }>;
+};
+
+export type ResearchFollowUpResponse = {
+  route: "replan" | "report_revision";
+  reason: string;
+  run: ResearchRunResponse | null;
+  report_id: number | null;
+};
+
 export const RESEARCH_LIFECYCLE_EVENT_TYPES = [
   "research.started",
   "research.plan_ready",
+  "research.planning_message",
+  "research.execution_started",
+  "research.step_started",
+  "research.step_completed",
+  "research.tool_started",
+  "research.tool_completed",
+  "research.source_collected",
+  "research.report_revision_started",
+  "research.report_revised",
   "research.awaiting_clarification",
   "research.awaiting_approval",
   "research.resumed",

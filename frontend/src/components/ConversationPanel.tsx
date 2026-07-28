@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, Trash2, X } from "lucide-react";
+import { Check, MessageSquare, PanelLeftClose, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ConversationRead } from "../api/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translateStatus } from "../i18n/messages";
@@ -11,9 +11,11 @@ type ConversationPanelProps = {
   onCreate: () => void;
   onRename: (id: number, title: string) => Promise<void> | void;
   onDelete: (id: number) => Promise<boolean> | boolean;
+  onCollapse?: () => void;
+  collapsed?: boolean;
 };
 
-export function ConversationPanel({ conversations, activeId, onSelect, onCreate, onRename, onDelete }: ConversationPanelProps) {
+export function ConversationPanel({ conversations, activeId, onSelect, onCreate, onRename, onDelete, onCollapse, collapsed = false }: ConversationPanelProps) {
   const { t } = useI18n();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -36,10 +38,32 @@ export function ConversationPanel({ conversations, activeId, onSelect, onCreate,
 
   return (
     <section className="flex h-full flex-col bg-white">
-      <div className="flex items-center justify-between border-b border-zinc-200 p-4">
-        <h2 className="text-sm font-semibold text-zinc-950">{t("conversation.history")}</h2>
-        <button type="button" className="nav-button" onClick={onCreate}>
-          {t("conversation.new")}
+      <div className={`border-b border-zinc-200 ${collapsed ? "p-2" : "p-3"}`}>
+        {collapsed ? null : (
+          <div className="flex items-center justify-between px-1 pb-3">
+            <h2 className="text-sm font-semibold text-zinc-950">{t("conversation.history")}</h2>
+            <button
+              type="button"
+              className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950"
+              aria-label={t("conversation.collapse")}
+              onClick={onCollapse}
+            >
+              <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          className={`flex items-center rounded-xl border border-zinc-300 bg-zinc-50 text-left text-sm font-medium text-zinc-900 hover:border-zinc-400 hover:bg-white ${
+            collapsed ? "h-10 w-10 justify-center" : "h-12 w-full gap-3 px-4"
+          }`}
+          aria-label={t("conversation.new")}
+          onClick={onCreate}
+        >
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current" aria-hidden="true">
+            <Plus className="h-3.5 w-3.5" />
+          </span>
+          {collapsed ? null : t("conversation.new")}
         </button>
       </div>
 
@@ -79,12 +103,18 @@ export function ConversationPanel({ conversations, activeId, onSelect, onCreate,
                       <button
                         type="button"
                         aria-current={active ? "page" : undefined}
-                        className="min-w-0 flex-1 p-1 text-left text-sm"
+                        className={`min-w-0 flex-1 p-1 text-sm ${collapsed ? "text-center" : "text-left"}`}
                         onClick={() => onSelect(conversation.id)}
                       >
-                        <span className="block truncate font-medium">{conversation.title}</span>
-                        <span className="block text-xs opacity-70">{translateStatus(t, conversation.status)}</span>
+                        {collapsed ? <MessageSquare className="mx-auto h-4 w-4" aria-hidden="true" /> : (
+                          <>
+                            <span className="block truncate font-medium">{conversation.title}</span>
+                            <span className="block text-xs opacity-70">{translateStatus(t, conversation.status)}</span>
+                          </>
+                        )}
                       </button>
+                      {collapsed ? null : (
+                        <>
                       <button
                         type="button"
                         aria-label={t("conversation.renameTitle", { title: conversation.title })}
@@ -101,6 +131,8 @@ export function ConversationPanel({ conversations, activeId, onSelect, onCreate,
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

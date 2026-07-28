@@ -53,6 +53,9 @@ def stream_events(
 
         watcher = asyncio.create_task(watch_disconnect())
         try:
+            # Flush response headers immediately so EventSource reports an open
+            # connection even when no lifecycle event is currently available.
+            yield ": connected\n\n"
             while not disconnected.is_set():
                 has_event, event = await asyncio.to_thread(_next_event, subscription)
                 if not has_event:

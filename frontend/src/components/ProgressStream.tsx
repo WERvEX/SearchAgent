@@ -11,6 +11,18 @@ function lifecycleDetail(event: ResearchLifecycleEvent, t: ReturnType<typeof use
   if (typeof event.data.message === "string") {
     return event.data.message;
   }
+  if (typeof event.data.step_seq === "number" && typeof event.data.step_title === "string") {
+    return t("progress.stepDetail", { step: event.data.step_seq, title: event.data.step_title });
+  }
+  if (typeof event.data.source_title === "string") {
+    return t("progress.sourceDetail", {
+      count: typeof event.data.source_count === "number" ? event.data.source_count : 1,
+      title: event.data.source_title,
+    });
+  }
+  if (typeof event.data.tool_name === "string") {
+    return t("progress.toolDetail", { tool: event.data.tool_name });
+  }
   if (typeof event.data.source_count === "number") {
     return t("progress.sourcesCollected", { count: event.data.source_count });
   }

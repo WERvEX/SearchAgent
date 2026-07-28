@@ -15,6 +15,7 @@ describe("AppShell", () => {
         left={<div>History list</div>}
         main={<div>Research workspace</div>}
         right={<div>Event stream</div>}
+        detailsOpen
       />,
     );
 
@@ -27,7 +28,7 @@ describe("AppShell", () => {
     expect(onPanelChange).toHaveBeenCalledWith("settings");
   });
 
-  it("uses a stacked responsive shell below xl while preserving the desktop pane contract", () => {
+  it("uses an overlay history below lg and a two-column desktop research layout", () => {
     render(
       <AppShell
         activePanel="research"
@@ -40,12 +41,10 @@ describe("AppShell", () => {
 
     expect(screen.getByTestId("app-shell-header")).toHaveClass("min-h-14", "flex-wrap");
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toHaveClass("flex-wrap");
-    expect(screen.getByTestId("app-shell-layout")).toHaveClass("grid-cols-1", "xl:grid-cols-[280px_minmax(0,1fr)_340px]");
-    expect(screen.getByTestId("app-shell-history")).toHaveClass("min-w-0", "xl:border-r", "xl:border-zinc-200");
-    expect(screen.getByTestId("app-shell-history")).not.toHaveClass("order-2", "order-1", "xl:order-1");
-    expect(screen.getByTestId("app-shell-main")).toHaveClass("app-shell-main", "min-w-0");
-    expect(screen.getByTestId("app-shell-main")).not.toHaveClass("order-1", "order-2", "xl:order-2");
-    expect(screen.getByTestId("app-shell-sidepanel")).toHaveClass("order-3", "xl:order-3");
+    expect(screen.getByTestId("app-shell-layout")).toHaveClass("grid-cols-1", "lg:grid-cols-[280px_minmax(0,1fr)]");
+    expect(screen.getByTestId("app-shell-history")).toHaveClass("hidden", "lg:block", "lg:border-r");
+    expect(screen.getByTestId("app-shell-main")).toHaveClass("min-w-0", "overflow-hidden");
+    expect(screen.queryByTestId("app-shell-sidepanel")).not.toBeInTheDocument();
   });
 
   it("exposes toggle button state with aria-pressed", () => {
