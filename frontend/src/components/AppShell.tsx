@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, History, PanelLeft, Settings, Telescope, X } from "lucide-react";
+import { History, PanelLeft, Settings, Telescope, X } from "lucide-react";
 import { useI18n } from "../i18n/I18nProvider";
 
 export type AppPanel = "research" | "settings";
@@ -67,12 +67,6 @@ export function AppShell({
             <History className="h-4 w-4" aria-hidden="true" />
             <span>{t("shell.research")}</span>
           </button>
-          {activePanel === "research" ? (
-            <button type="button" className={detailsOpen ? "nav-button-active" : "nav-button"} aria-pressed={detailsOpen} onClick={onToggleDetails}>
-              <Activity className="h-4 w-4" aria-hidden="true" />
-              <span>{t("progress.title")}</span>
-            </button>
-          ) : null}
           <button
             type="button"
             className={activePanel === "settings" ? "nav-button-active" : "nav-button"}

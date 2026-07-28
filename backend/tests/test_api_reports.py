@@ -12,6 +12,21 @@ def test_render_report_html_escapes_raw_html():
     assert "&lt;img" in html
 
 
+def test_render_report_html_converts_footnotes_to_linked_sources():
+    from app.services.report_export import render_report_html
+
+    html = render_report_html(
+        "# 报告\n\n判断[^1][^2]，无效项[^9]。\n\n"
+        "[^1]: [来源一](https://example.com/1)\n"
+        "[^2]: [来源二](https://example.com/2)"
+    )
+
+    assert '<sup class="citation"><a href="#source-1">1</a></sup>' in html
+    assert 'id="source-1"' in html
+    assert "[9]" in html
+    assert "[^1]" not in html
+
+
 def test_report_read_and_markdown_download(app_home):
     from app.db import session as db
     from app.db.models import Conversation, Report, ResearchProject

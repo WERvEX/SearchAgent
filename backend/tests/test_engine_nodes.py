@@ -544,3 +544,25 @@ def test_normalize_report_analysis_accepts_plain_numbered_citations():
 
     assert normalized is not None
     assert "[^1]" in normalized
+
+
+def test_planning_questions_are_normalized_to_three_single_choice_prompts():
+    from app.engine.nodes import _normalize_planning_questions
+
+    questions = _normalize_planning_questions([
+        {
+            "id": f"q{index}",
+            "prompt": f"Question {index}",
+            "options": [
+                {"id": "a", "label": "Option A"},
+                {"id": "b", "label": "Option B", "description": "Details"},
+            ],
+            "allow_custom": True,
+        }
+        for index in range(1, 5)
+    ])
+
+    assert len(questions) == 3
+    assert questions[0]["id"] == "q1"
+    assert questions[0]["options"][1]["description"] == "Details"
+    assert questions[0]["allow_custom"] is True

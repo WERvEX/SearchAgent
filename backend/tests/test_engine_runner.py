@@ -283,6 +283,52 @@ def test_execute_rejects_a_stale_plan_version(session):
         ))
 
 
+def test_structured_planning_answers_are_validated_and_summarized():
+    from app.engine.runner import _validate_resume_payload
+
+    expected = {
+        "kind": "planning_input",
+        "questions": [
+            {
+                "id": "region",
+                "prompt": "地区",
+                "options": [{"id": "china", "label": "中国"}, {"id": "global", "label": "全球"}],
+                "allow_custom": True,
+            },
+            {
+                "id": "period",
+                "prompt": "时间",
+                "options": [{"id": "one", "label": "近一年"}, {"id": "three", "label": "近三年"}],
+                "allow_custom": True,
+            },
+        ],
+    }
+    decision = _validate_resume_payload(expected, {
+        "kind": "planning_answers",
+        "answers": [
+            {"question_id": "region", "option_id": "china"},
+            {"question_id": "period", "text": "2024 至 2026"},
+        ],
+    })
+
+    assert decision["message"] == "地区: 中国\n时间: 2024 至 2026"
+
+    with pytest.raises(ValueError, match="Every planning question"):
+        _validate_resume_payload(expected, {
+            "kind": "planning_answers",
+            "answers": [{"question_id": "region", "option_id": "china"}],
+        })
+
+    with pytest.raises(ValueError, match="no longer available"):
+        _validate_resume_payload(expected, {
+            "kind": "planning_answers",
+            "answers": [
+                {"question_id": "region", "option_id": "missing"},
+                {"question_id": "period", "option_id": "one"},
+            ],
+        })
+
+
 def test_follow_up_can_create_a_report_only_revision(session):
     from sqlalchemy import select
 

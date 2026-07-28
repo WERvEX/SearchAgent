@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
+from playwright.async_api import Error as PlaywrightError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -38,7 +39,16 @@ def download_markdown(report_id: int, session: Session = Depends(get_db)):
 @router.post("/{report_id}/export.pdf")
 async def export_pdf(report_id: int, session: Session = Depends(get_db)):
     report = _get_report_or_404(session, report_id)
-    path = await report_export.export_pdf(report)
+    try:
+        path = await report_export.export_pdf(report)
+    except PlaywrightError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PDF rendering browser is unavailable. "
+                "Install Chromium with `playwright install chromium` and retry."
+            ),
+        ) from exc
     report.file_path = str(path)
     session.commit()
     return {"format": "pdf", "file_path": str(path)}
@@ -47,7 +57,16 @@ async def export_pdf(report_id: int, session: Session = Depends(get_db)):
 @router.get("/{report_id}/download.pdf")
 async def download_pdf(report_id: int, session: Session = Depends(get_db)):
     report = _get_report_or_404(session, report_id)
-    path = await report_export.export_pdf(report)
+    try:
+        path = await report_export.export_pdf(report)
+    except PlaywrightError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PDF rendering browser is unavailable. "
+                "Install Chromium with `playwright install chromium` and retry."
+            ),
+        ) from exc
     report.file_path = str(path)
     session.commit()
     return FileResponse(path, media_type="application/pdf", filename=path.name)

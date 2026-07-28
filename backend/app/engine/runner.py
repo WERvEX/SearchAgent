@@ -11,6 +11,7 @@ from app.db.models import Conversation, Message, Report, ResearchProject, Source
 from app.engine.checkpointer import create_checkpointer
 from app.engine.context import EngineContext
 from app.engine.graph import compile_research_graph
+from app.services.report_markdown import normalize_report_markdown
 
 
 def _config(thread_id: str) -> dict:
@@ -67,7 +68,15 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
     session.commit()
 
 
-def _message_meta(*, thread_id: str, project_id: int, profile_id: int, kind: str, interrupt_id: str | None = None) -> dict:
+def _message_meta(
+    *,
+    thread_id: str,
+    project_id: int,
+    profile_id: int,
+    kind: str,
+    interrupt_id: str | None = None,
+    interaction: dict | None = None,
+) -> dict:
     meta = {
         "research_thread_id": thread_id,
         "research_project_id": project_id,
@@ -76,7 +85,51 @@ def _message_meta(*, thread_id: str, project_id: int, profile_id: int, kind: str
     }
     if interrupt_id:
         meta["research_interrupt_id"] = interrupt_id
+    if interaction:
+        meta["research_interaction"] = interaction
     return meta
+
+
+def _planning_answer_message(expected: dict, answers: list[dict]) -> str:
+    questions = expected.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise ValueError("The current planning prompt does not accept structured answers")
+    question_by_id = {
+        str(question.get("id")): question
+        for question in questions
+        if isinstance(question, dict) and question.get("id")
+    }
+    answer_by_id: dict[str, dict] = {}
+    for answer in answers:
+        question_id = str(answer.get("question_id") or "")
+        if question_id not in question_by_id or question_id in answer_by_id:
+            raise ValueError("Planning answers contain an unknown or duplicate question")
+        answer_by_id[question_id] = answer
+    if set(answer_by_id) != set(question_by_id):
+        raise ValueError("Every planning question must be answered")
+
+    lines: list[str] = []
+    for question_id, question in question_by_id.items():
+        answer = answer_by_id[question_id]
+        options = {
+            str(option.get("id")): option
+            for option in question.get("options", [])
+            if isinstance(option, dict) and option.get("id")
+        }
+        option_id = answer.get("option_id")
+        if option_id is not None:
+            option = options.get(str(option_id))
+            if option is None:
+                raise ValueError("A selected planning option is no longer available")
+            value = str(option.get("label") or "").strip()
+        else:
+            if not question.get("allow_custom", True):
+                raise ValueError("This planning question does not allow a custom answer")
+            value = str(answer.get("text") or "").strip()
+            if not value:
+                raise ValueError("Custom planning answers must not be blank")
+        lines.append(f"{question.get('prompt')}: {value}")
+    return "\n".join(lines)
 
 
 def _record_message_once(
@@ -141,6 +194,10 @@ def _persist_waiting_message(
             profile_id=profile_id,
             kind="plan_ready" if payload.get("kind") in {"plan_ready", "plan_approval"} else "planning_response",
             interrupt_id=str(payload.get("id") or ""),
+            interaction={
+                "kind": payload.get("kind"),
+                "questions": payload.get("questions") or [],
+            } if payload.get("questions") else None,
         ),
     )
 
@@ -154,13 +211,18 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
         decision = {**decision, "kind": "plan_approval"}
         actual_kind = "plan_approval"
     compatible = {
-        "planning_input": {"planning_message", "clarification"},
+        "planning_input": {"planning_message", "planning_answers", "clarification"},
         "plan_ready": {"planning_message", "execute_plan", "plan_approval"},
         "clarification": {"clarification", "planning_message"},
         "plan_approval": {"plan_approval", "planning_message", "execute_plan"},
     }
     if actual_kind not in compatible.get(expected_kind, {expected_kind}):
         raise ValueError(f"Expected a response for {expected_kind}")
+    if actual_kind == "planning_answers":
+        decision = {
+            **decision,
+            "message": _planning_answer_message(expected, decision.get("answers") or []),
+        }
     return decision
 
 
@@ -235,6 +297,7 @@ async def start_research(
         "plan_version": None,
         "plan_ready": False,
         "planner_message": None,
+        "planner_questions": [],
         "approved": False,
         "replan_feedback": None,
         "clarification_question": None,
@@ -305,7 +368,7 @@ async def resume_research(
         decision = {**decision, "response_language": response_language}
     expected_payload = _interrupt_payload({}, graph, config)
     decision = _validate_resume_payload(expected_payload, decision)
-    if decision["kind"] in {"clarification", "planning_message"}:
+    if decision["kind"] in {"clarification", "planning_message", "planning_answers"}:
         answer = str(decision.get("answer") or decision.get("message") or "").strip()
         if not answer:
             raise ValueError("A non-empty planning message is required")
@@ -323,6 +386,10 @@ async def resume_research(
                     profile_id=profile_id,
                     kind="planning_message",
                     interrupt_id=str(expected_payload.get("id") or ""),
+                    interaction={
+                        "kind": "planning_answers",
+                        "answers": decision.get("answers") or [],
+                    } if decision["kind"] == "planning_answers" else None,
                 ),
             )
     if decision["kind"] in {"execute_plan", "plan_approval"} and decision.get("approved", True):
@@ -552,6 +619,7 @@ async def follow_up_research(
         revised = ""
     if not revised:
         raise RuntimeError("Report revision failed")
+    revised = normalize_report_markdown(revised, len(evidence))
 
     from app.engine.persistence import persist_report
 

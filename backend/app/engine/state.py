@@ -15,6 +15,7 @@ class ResearchState(TypedDict):
     plan_version: Optional[int]
     plan_ready: bool
     planner_message: Optional[str]
+    planner_questions: list[dict]
     approved: bool
     replan_feedback: Optional[str]
     clarification_question: Optional[str]

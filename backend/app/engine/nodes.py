@@ -12,6 +12,7 @@ from app.db.models import Source, Step
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
 from app.services.settings_service import get_preference
+from app.services.report_markdown import normalize_report_markdown
 
 
 def _get_llm(ctx: EngineContext) -> Any:
@@ -85,6 +86,46 @@ def _fallback_steps(*, chinese: bool = True) -> list[dict]:
         {"seq": 1, "title": "检索资料", "status": "pending"},
         {"seq": 2, "title": "整理证据", "status": "pending"},
     ]
+
+
+def _normalize_planning_questions(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    questions: list[dict] = []
+    for index, item in enumerate(value[:3], start=1):
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or item.get("question") or "").strip()
+        raw_options = item.get("options")
+        if not prompt or not isinstance(raw_options, list):
+            continue
+        options: list[dict] = []
+        for option_index, option in enumerate(raw_options[:4], start=1):
+            if isinstance(option, str):
+                label = option.strip()
+                description = ""
+                option_id = f"o{option_index}"
+            elif isinstance(option, dict):
+                label = str(option.get("label") or "").strip()
+                description = str(option.get("description") or "").strip()
+                option_id = str(option.get("id") or f"o{option_index}").strip()
+            else:
+                continue
+            if label and option_id:
+                options.append({
+                    "id": option_id,
+                    "label": label,
+                    **({"description": description} if description else {}),
+                })
+        if len(options) < 2:
+            continue
+        questions.append({
+            "id": str(item.get("id") or f"q{index}").strip() or f"q{index}",
+            "prompt": prompt,
+            "options": options,
+            "allow_custom": bool(item.get("allow_custom", True)),
+        })
+    return questions
 
 
 def _is_chinese(state: ResearchState) -> bool:
@@ -315,6 +356,7 @@ def _normalize_report_analysis(content: str, source_count: int) -> str | None:
         return f"[^{source_id}]" if 1 <= source_id <= source_count else match.group(0)
 
     content = re.sub(r"(?<!\^)\[(\d+)\]", _normalize_citation, content)
+    content = normalize_report_markdown(content, source_count)
     if len(content) < 100 or not re.search(r"\[\^\d+\]", content):
         return None
     if "## " not in content:
@@ -392,7 +434,12 @@ def make_nodes(ctx: EngineContext):
             "You are a research planning assistant. Clarify the objective in a planning-only "
             "chat, then return one JSON "
             "object and no prose. If important scope is missing or the user is asking for an "
-            "explanation, return {\"ready\": false, \"message\": \"...\", \"objective\": \"...\"}. "
+            "explanation, return {\"ready\": false, \"message\": \"...\", \"objective\": \"...\", "
+            "\"questions\": [{\"id\": \"q1\", \"prompt\": \"...\", \"options\": "
+            "[{\"id\": \"o1\", \"label\": \"...\", \"description\": \"...\"}, "
+            "{\"id\": \"o2\", \"label\": \"...\"}], \"allow_custom\": true}]}. "
+            "Return between one and three single-choice questions when useful, with two to four "
+            "meaningfully different options per question. "
             "When the work is decision-complete, return {\"ready\": true, \"message\": \"...\", "
             "\"objective\": \"...\", \"summary\": \"...\", \"steps\": [{\"seq\": 1, "
             "\"title\": \"...\", \"description\": \"...\", \"status\": \"pending\"}]}. "
@@ -425,10 +472,12 @@ def make_nodes(ctx: EngineContext):
                 else "Please clarify the specific scope of the research objective."
             )).strip()
             objective = str(parsed.get("objective") or current_objective).strip()
+            questions = _normalize_planning_questions(parsed.get("questions"))
             publish_progress("research.planning_message", state, message=message)
             return {
                 "objective": objective,
                 "planner_message": message,
+                "planner_questions": questions,
                 "plan_ready": False,
                 "approved": False,
             }
@@ -448,6 +497,7 @@ def make_nodes(ctx: EngineContext):
             publish_progress("research.planning_message", state, message=message)
             return {
                 "planner_message": message,
+                "planner_questions": [],
                 "plan_ready": False,
                 "approved": False,
             }
@@ -496,6 +546,7 @@ def make_nodes(ctx: EngineContext):
             "plan_version": version,
             "plan_ready": True,
             "planner_message": message,
+            "planner_questions": [],
             "approved": False,
             "replan_feedback": None,
         }
@@ -558,6 +609,8 @@ def make_nodes(ctx: EngineContext):
                 )
             ),
         }
+        if not ready and state.get("planner_questions"):
+            payload["questions"] = state["planner_questions"]
         if ready:
             payload.update({
                 "plan": state.get("plan"),
@@ -579,6 +632,11 @@ def make_nodes(ctx: EngineContext):
                 kind = "planning_message"
                 response = {**response, "message": response.get("feedback")}
 
+        if kind == "planning_answers":
+            message = str(response.get("message") or "").strip()
+            if not message:
+                raise ValueError("A summarized planning answer is required")
+            kind = "planning_message"
         if kind == "planning_message":
             message = str(response.get("message") or "").strip()
             if not message:
@@ -587,6 +645,7 @@ def make_nodes(ctx: EngineContext):
                 "messages": [{"role": "user", "content": message}],
                 "response_language": response.get("response_language") or state.get("response_language"),
                 "planner_message": None,
+                "planner_questions": [],
                 "plan_ready": False,
                 "approved": False,
                 "replan_feedback": message,

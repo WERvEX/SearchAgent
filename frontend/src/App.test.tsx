@@ -165,6 +165,48 @@ describe("App Codex-style research flow", () => {
     }));
   });
 
+  it("restores structured planning questions and submits typed answers", async () => {
+    vi.mocked(api.getActiveResearch).mockResolvedValue({
+      thread_id: "thread-questions",
+      state: {},
+      interrupted: true,
+      interrupt_payload: {
+        id: "interrupt-1",
+        kind: "planning_input",
+        message: "Choose the research scope.",
+        questions: [{
+          id: "region",
+          prompt: "Which region?",
+          options: [
+            { id: "europe", label: "Europe" },
+            { id: "asia", label: "Asia" },
+          ],
+          allow_custom: true,
+        }],
+      },
+    });
+    vi.mocked(api.resumeResearch).mockResolvedValue({
+      thread_id: "thread-questions",
+      state: { plan_version: 1 },
+      interrupted: true,
+      interrupt_payload: { kind: "plan_ready", plan_version: 1, plan: { summary: plan.summary, steps: plan.steps } },
+    });
+    vi.mocked(api.getConversation).mockResolvedValueOnce(detail).mockResolvedValue(plannedDetail);
+
+    render(<I18nProvider><App /></I18nProvider>);
+    await userEvent.click(await screen.findByRole("radio", { name: "Europe" }));
+    await userEvent.click(screen.getByRole("button", { name: "Submit answers" }));
+
+    await waitFor(() => expect(api.resumeResearch).toHaveBeenCalledWith("thread-questions", {
+      profile_id: 7,
+      response_language: "en",
+      decision: {
+        kind: "planning_answers",
+        answers: [{ question_id: "region", option_id: "europe" }],
+      },
+    }));
+  });
+
   it("renders the latest plan inline and executes its exact version", async () => {
     vi.mocked(api.getConversation).mockResolvedValue(plannedDetail);
     vi.mocked(api.getActiveResearch).mockResolvedValue({
@@ -225,7 +267,7 @@ describe("App Codex-style research flow", () => {
     vi.mocked(api.getConversation).mockResolvedValue(plannedDetail);
     render(<I18nProvider><App /></I18nProvider>);
     await screen.findByText("Compare pricing and limits");
-    await userEvent.click(screen.getByRole("button", { name: "Progress" }));
+    await userEvent.click(screen.getByRole("button", { name: "Execution details" }));
     expect(screen.getByRole("heading", { name: "Execution details" })).toBeInTheDocument();
   });
 });

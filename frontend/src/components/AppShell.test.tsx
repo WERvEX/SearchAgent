@@ -45,6 +45,7 @@ describe("AppShell", () => {
     expect(screen.getByTestId("app-shell-history")).toHaveClass("hidden", "lg:block", "lg:border-r");
     expect(screen.getByTestId("app-shell-main")).toHaveClass("min-w-0", "overflow-hidden");
     expect(screen.queryByTestId("app-shell-sidepanel")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Progress" })).not.toBeInTheDocument();
   });
 
   it("exposes toggle button state with aria-pressed", () => {

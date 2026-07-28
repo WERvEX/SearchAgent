@@ -156,4 +156,31 @@ describe("ResearchWorkspace", () => {
     expect(within(timeline).getByText("Final research output")).toBeInTheDocument();
     expect(timeline).not.toContainElement(screen.getByLabelText("Research request"));
   });
+
+  it("opens contextual execution details from the research title bar", async () => {
+    const onToggleDetails = vi.fn();
+    render(
+      <ResearchWorkspace
+        conversation={{
+          id: 4,
+          title: "Search API evaluation",
+          status: "executing",
+          created_at: "",
+          updated_at: "",
+          messages: [],
+          projects: [],
+        }}
+        profileId={7}
+        runPhase="executing"
+        executionProgress={{ completed: 2, total: 5 }}
+        onToggleDetails={onToggleDetails}
+        onSend={vi.fn()}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Executing 2/5" });
+    expect(button).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(button);
+    expect(onToggleDetails).toHaveBeenCalledOnce();
+  });
 });

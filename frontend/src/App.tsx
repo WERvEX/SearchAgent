@@ -7,6 +7,8 @@ import type {
   PreferenceRead,
   LLMProfileRead,
   PlanArtifact,
+  PlanningAnswer,
+  PlanningQuestion,
   ProjectExecutionDetail,
   ReportRead,
   ResearchLifecycleEvent,
@@ -611,6 +613,34 @@ export default function App() {
     }
   }
 
+  async function handlePlanningAnswers(answers: PlanningAnswer[], displayMessage: string) {
+    if (!currentRun || !selectedProfileId || resumePendingRef.current) {
+      return;
+    }
+    resumePendingRef.current = true;
+    const fallbackPhase = runPhase;
+    setOptimisticUserMessage(displayMessage);
+    setAssistantThinking(true);
+    try {
+      setErrorMessage(null);
+      updateRunPhase("resuming");
+      const run = await api.resumeResearch(currentRun.thread_id, {
+        profile_id: selectedProfileId,
+        response_language: locale,
+        decision: { kind: "planning_answers", answers },
+      });
+      await settleRun(run);
+    } catch (error) {
+      updateRunPhase(fallbackPhase);
+      setAssistantThinking(false);
+      setOptimisticUserMessage(null);
+      await refreshConversation().catch(() => null);
+      setErrorMessage(messageFromError(error, "app.failedToResumeResearch"));
+    } finally {
+      resumePendingRef.current = false;
+    }
+  }
+
   async function handleFollowUp(message: string, routeOverride?: "replan" | "report_revision") {
     if (!activeConversation || !latestProject || !selectedProfileId) {
       return;
@@ -889,6 +919,21 @@ export default function App() {
             routeNotice={routeNotice}
             optimisticUserMessage={optimisticUserMessage}
             assistantThinking={assistantThinking}
+            planningPrompt={
+              Array.isArray(currentRun?.interrupt_payload?.questions)
+                ? {
+                    id: typeof currentRun?.interrupt_payload?.id === "string" ? currentRun.interrupt_payload.id : undefined,
+                    questions: currentRun.interrupt_payload.questions as PlanningQuestion[],
+                  }
+                : null
+            }
+            onSubmitPlanningAnswers={handlePlanningAnswers}
+            detailsOpen={detailsOpen}
+            onToggleDetails={() => setDetailsOpen((current) => !current)}
+            executionProgress={executionDetail ? {
+              completed: executionDetail.steps.filter((step) => step.status === "completed" || step.status === "done").length,
+              total: executionDetail.steps.length,
+            } : null}
             onOverrideRoute={(route) => {
               if (lastFollowUp) {
                 void handleFollowUp(lastFollowUp, route);

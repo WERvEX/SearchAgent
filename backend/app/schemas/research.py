@@ -32,6 +32,22 @@ class ResearchResumeRequest(BaseModel):
                 raise ValueError("decision.message must be a non-empty string")
             self.decision["message"] = message.strip()
             return self
+        if kind == "planning_answers":
+            answers = self.decision.get("answers")
+            if not isinstance(answers, list) or not answers:
+                raise ValueError("decision.answers must be a non-empty list")
+            for answer in answers:
+                if not isinstance(answer, dict) or not isinstance(answer.get("question_id"), str):
+                    raise ValueError("each planning answer requires question_id")
+                option_id = answer.get("option_id")
+                text = answer.get("text")
+                if option_id is None and (not isinstance(text, str) or not text.strip()):
+                    raise ValueError("each planning answer requires option_id or non-empty text")
+                if option_id is not None and not isinstance(option_id, str):
+                    raise ValueError("answer.option_id must be a string")
+                if isinstance(text, str):
+                    answer["text"] = text.strip()
+            return self
         if kind == "execute_plan":
             if not isinstance(self.decision.get("plan_version"), int):
                 raise ValueError("decision.plan_version is required when executing")
@@ -44,7 +60,8 @@ class ResearchResumeRequest(BaseModel):
             return self
         if kind not in (None, "plan_approval"):
             raise ValueError(
-                "decision.kind must be planning_message, execute_plan, clarification, or plan_approval"
+                "decision.kind must be planning_message, planning_answers, execute_plan, "
+                "clarification, or plan_approval"
             )
         approved = self.decision.get("approved")
         if not isinstance(approved, bool):

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Bot, LoaderCircle, Send, User } from "lucide-react";
-import type { ConversationDetail, PlanArtifact, ResearchRunPhase } from "../api/types";
+import { Activity, Bot, LoaderCircle, Send, User } from "lucide-react";
+import type { ConversationDetail, PlanArtifact, PlanningAnswer, PlanningQuestion, ResearchRunPhase } from "../api/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { PlanCard } from "./PlanCard";
+import { PlanningQuestionCard } from "./PlanningQuestionCard";
 
 type ResearchWorkspaceProps = {
   conversation: ConversationDetail | null;
@@ -22,6 +23,11 @@ type ResearchWorkspaceProps = {
   onOverrideRoute?: (route: "replan" | "report_revision") => void;
   optimisticUserMessage?: string | null;
   assistantThinking?: boolean;
+  planningPrompt?: { id?: string; questions: PlanningQuestion[] } | null;
+  onSubmitPlanningAnswers?: (answers: PlanningAnswer[], displayMessage: string) => void;
+  detailsOpen?: boolean;
+  onToggleDetails?: () => void;
+  executionProgress?: { completed: number; total: number } | null;
 };
 
 export function ResearchWorkspace({
@@ -42,6 +48,11 @@ export function ResearchWorkspace({
   onOverrideRoute,
   optimisticUserMessage = null,
   assistantThinking = false,
+  planningPrompt = null,
+  onSubmitPlanningAnswers,
+  detailsOpen = false,
+  onToggleDetails,
+  executionProgress = null,
 }: ResearchWorkspaceProps) {
   const { t } = useI18n();
   const [message, setMessage] = useState("");
@@ -51,7 +62,18 @@ export function ResearchWorkspace({
   const awaitingClarification = runPhase === "awaiting_clarification";
   const legacyComposer = !onSend && Boolean(onStart || onClarify);
   const canChat = !busy;
+  const hasStructuredQuestions = Boolean(planningPrompt?.questions.length);
   const disabled = !conversation || !profileId || trimmed.length === 0 || !canChat;
+  const historicalAnswers = new Map<string, PlanningAnswer[]>();
+  for (const item of conversation?.messages ?? []) {
+    const interaction = item.meta?.research_interaction as Record<string, unknown> | undefined;
+    const interruptId = typeof item.meta?.research_interrupt_id === "string"
+      ? item.meta.research_interrupt_id
+      : null;
+    if (interruptId && interaction?.kind === "planning_answers" && Array.isArray(interaction.answers)) {
+      historicalAnswers.set(interruptId, interaction.answers as PlanningAnswer[]);
+    }
+  }
   const statusLabel =
     awaitingClarification
       ? t("workspace.planning")
@@ -96,9 +118,24 @@ export function ResearchWorkspace({
           {statusLabel}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2 text-xs text-zinc-500">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-xs text-zinc-500">
           {profileName ? <span className="rounded-full bg-zinc-100 px-2.5 py-1">{profileName}</span> : null}
           {streamStatus ? <span className="rounded-full border border-zinc-200 px-2.5 py-1">{streamStatus}</span> : null}
+          {conversation && onToggleDetails ? (
+            <button
+              type="button"
+              className={detailsOpen ? "nav-button-active" : "nav-button"}
+              aria-pressed={detailsOpen}
+              onClick={onToggleDetails}
+            >
+              <Activity className="h-4 w-4" aria-hidden="true" />
+              <span>
+                {runPhase === "executing" && executionProgress?.total
+                  ? t("progress.executingCount", executionProgress)
+                  : t("execution.details")}
+              </span>
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -106,7 +143,20 @@ export function ResearchWorkspace({
         <div className="mx-auto max-w-4xl space-y-4">
         {conversation?.messages.length ? (
           <div className="space-y-4">
-            {conversation.messages.map((item) => (
+            {conversation.messages.map((item) => {
+              const interaction = item.meta?.research_interaction as Record<string, unknown> | undefined;
+              const historicalQuestions = Array.isArray(interaction?.questions)
+                ? interaction.questions as PlanningQuestion[]
+                : [];
+              const interruptId = typeof item.meta?.research_interrupt_id === "string"
+                ? item.meta.research_interrupt_id
+                : undefined;
+              const activeQuestions = Boolean(
+                historicalQuestions.length &&
+                planningPrompt?.questions.length &&
+                (!planningPrompt.id || planningPrompt.id === interruptId),
+              );
+              return (
               <div
                 key={item.id}
                 data-testid="conversation-message"
@@ -120,7 +170,17 @@ export function ResearchWorkspace({
                 <div className={item.role === "user"
                   ? "max-w-[85%] rounded-2xl rounded-br-md bg-zinc-900 px-4 py-3 text-sm text-white"
                   : "max-w-[85%] rounded-2xl rounded-bl-md border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 shadow-sm"}>
-                  <div className="whitespace-pre-wrap leading-6">{item.content}</div>
+                  {historicalQuestions.length ? (
+                    <div className="w-full min-w-[min(42rem,78vw)] max-w-full">
+                      <PlanningQuestionCard
+                        questions={historicalQuestions}
+                        answers={interruptId ? historicalAnswers.get(interruptId) : undefined}
+                        active={activeQuestions}
+                        pending={runPhase === "resuming"}
+                        onSubmit={activeQuestions ? onSubmitPlanningAnswers : undefined}
+                      />
+                    </div>
+                  ) : <div className="whitespace-pre-wrap leading-6">{item.content}</div>}
                 </div>
                 {item.role === "user" ? (
                   <span className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-zinc-700">
@@ -128,7 +188,8 @@ export function ResearchWorkspace({
                   </span>
                 ) : null}
               </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="rounded-md border border-dashed border-zinc-200 bg-white p-4 text-sm text-zinc-500">
@@ -181,10 +242,21 @@ export function ResearchWorkspace({
             </div>
           </div>
         ) : null}
+        {hasStructuredQuestions && !conversation?.messages.some((item) => (
+          item.meta?.research_interrupt_id === planningPrompt?.id &&
+          Array.isArray((item.meta?.research_interaction as Record<string, unknown> | undefined)?.questions)
+        )) ? (
+          <PlanningQuestionCard
+            questions={planningPrompt?.questions ?? []}
+            active
+            pending={runPhase === "resuming"}
+            onSubmit={onSubmitPlanningAnswers}
+          />
+        ) : null}
         </div>
       </div>
 
-      <form
+      {!hasStructuredQuestions ? <form
         className="border-t border-zinc-200 bg-white p-4"
         onSubmit={(event) => {
           event.preventDefault();
@@ -221,7 +293,7 @@ export function ResearchWorkspace({
           {legacyComposer ? awaitingClarification ? t("workspace.submitClarification") : t("workspace.start") : t("workspace.send")}
         </button>
         </div>
-      </form>
+      </form> : null}
     </section>
   );
 }

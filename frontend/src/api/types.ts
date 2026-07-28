@@ -59,6 +59,25 @@ export type PlanArtifact = {
   created_at?: string;
 };
 
+export type PlanningQuestionOption = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+export type PlanningQuestion = {
+  id: string;
+  prompt: string;
+  options: PlanningQuestionOption[];
+  allow_custom: boolean;
+};
+
+export type PlanningAnswer = {
+  question_id: string;
+  option_id?: string;
+  text?: string;
+};
+
 export type ResearchRunResponse = {
   thread_id: string;
   state: Record<string, unknown> & { report_id?: number };
