@@ -38,11 +38,44 @@ function createPlaceholderRun(threadId: string): ResearchRunResponse {
 }
 
 function deriveRunPhaseFromResponse(run: ResearchRunResponse): ResearchRunPhase {
-  return run.interrupted ? "awaiting_approval" : "completed";
+  return run.interrupted && run.interrupt_payload?.kind === "clarification"
+    ? "awaiting_clarification"
+    : run.interrupted
+      ? "awaiting_approval"
+      : "completed";
+}
+
+function getLatestProject(conversation: ConversationDetail) {
+  return conversation.projects.reduce<(typeof conversation.projects)[number] | null>(
+    (latest, project) => (latest === null || project.id > latest.id ? project : latest),
+    null,
+  );
+}
+
+function deriveRunPhaseFromConversation(conversation: ConversationDetail): ResearchRunPhase {
+  const latestProject = getLatestProject(conversation);
+  const status = latestProject?.status ?? conversation.status;
+
+  if (status === "awaiting_clarification") {
+    return "awaiting_clarification";
+  }
+  if (status === "awaiting_approval") {
+    return "awaiting_approval";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  if (status === "running" || status === "active") {
+    return "active";
+  }
+  if (status === "done" || status === "completed" || latestProject?.latest_report_id != null) {
+    return "completed";
+  }
+  return "idle";
 }
 
 function isStableRunPhase(phase: ResearchRunPhase) {
-  return phase === "awaiting_approval" || phase === "completed" || phase === "failed";
+  return phase === "awaiting_clarification" || phase === "awaiting_approval" || phase === "completed" || phase === "failed";
 }
 
 function resolveSelectedProfileId(
@@ -76,6 +109,7 @@ const phaseMessageKeys = {
   idle: "phase.idle",
   starting: "phase.starting",
   active: "phase.active",
+  awaiting_clarification: "phase.awaiting_clarification",
   awaiting_approval: "phase.awaiting_approval",
   resuming: "phase.resuming",
   completed: "phase.completed",
@@ -95,11 +129,16 @@ function mergeLifecycleEventIntoRun(
   const reportId = typeof event.data.report_id === "number" ? event.data.report_id : null;
   const nextState = reportId === null ? base.state : { ...base.state, report_id: reportId };
 
-  if (event.event === "research.awaiting_approval") {
+  if (event.event === "research.awaiting_clarification" || event.event === "research.awaiting_approval") {
+    const interruptPayload = event.data.interrupt_payload;
     return {
       ...base,
       state: nextState,
       interrupted: true,
+      interrupt_payload:
+        interruptPayload && typeof interruptPayload === "object"
+          ? interruptPayload as Record<string, unknown>
+          : base.interrupt_payload,
     };
   }
 
@@ -146,6 +185,18 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (
+      runPhase === "idle" ||
+      runPhase === "awaiting_clarification" ||
+      runPhase === "awaiting_approval" ||
+      runPhase === "completed" ||
+      runPhase === "failed"
+    ) {
+      resumePendingRef.current = false;
+    }
+  }, [runPhase]);
+
   const handleLifecycleEvent = useCallback((event: ResearchLifecycleEvent) => {
     setCurrentRun((current) => mergeLifecycleEventIntoRun(current, event));
 
@@ -156,6 +207,12 @@ export default function App() {
     if (event.event === "research.started" || event.event === "research.resumed") {
       updateRunPhase("active");
       setStatusMessageKey(statusMessageForPhase("active"));
+      return;
+    }
+
+    if (event.event === "research.awaiting_clarification") {
+      updateRunPhase("awaiting_clarification");
+      setStatusMessageKey(statusMessageForPhase("awaiting_clarification"));
       return;
     }
 
@@ -183,7 +240,7 @@ export default function App() {
   const eventStream = useEventStream({
     threadId: currentRun?.thread_id ?? null,
     conversationId: activeConversation?.id ?? null,
-    replayLimit: 100,
+    replayLimit: runPhase === "starting" && currentRun === null ? 0 : 100,
     displayLimit: 80,
     promoteDiscoveredThread: runPhase === "starting" && currentRun === null,
     onEvent: handleLifecycleEvent,
@@ -207,18 +264,17 @@ export default function App() {
     async function loadInitialState() {
       try {
         setErrorMessage(null);
-        const conversationList = await api.listConversations();
+        let conversationList = await api.listConversations();
+        if (conversationList.length === 0) {
+          conversationList = [await api.createConversation(t("conversation.untitled"))];
+        }
         if (cancelled) {
           return;
         }
 
         setConversations(conversationList);
 
-        if (conversationList[0]) {
-          setActiveConversationId(conversationList[0].id);
-        } else {
-          setStatusMessageKey("app.createConversation");
-        }
+        setActiveConversationId(conversationList[0].id);
       } catch (error) {
         if (!cancelled) {
           setErrorMessage(messageFromError(error, "app.failedToLoadWorkspace"));
@@ -309,15 +365,23 @@ export default function App() {
     async function loadConversation() {
       try {
         setErrorMessage(null);
-        const detail = await api.getConversation(conversationId);
+        setCurrentRun(null);
+        setRetainedReportId(null);
+        setReport(null);
+        const activeResearch = typeof api.getActiveResearch === "function"
+          ? api.getActiveResearch(conversationId)
+          : Promise.resolve(null);
+        const [detail, activeRun] = await Promise.all([api.getConversation(conversationId), activeResearch]);
         if (cancelled) {
           return;
         }
         setActiveConversation(detail);
-        setCurrentRun(null);
-        setRetainedReportId(null);
-        updateRunPhase("idle");
-        setStatusMessageKey(statusMessageForPhase("idle"));
+        setCurrentRun(activeRun);
+        const latestReportId = getLatestProject(detail)?.latest_report_id ?? null;
+        setRetainedReportId(latestReportId);
+        const phase = activeRun ? deriveRunPhaseFromResponse(activeRun) : deriveRunPhaseFromConversation(detail);
+        updateRunPhase(phase);
+        setStatusMessageKey(statusMessageForPhase(phase));
       } catch (error) {
         if (!cancelled) {
           setErrorMessage(messageFromError(error, "app.failedToLoadConversation"));
@@ -413,6 +477,7 @@ export default function App() {
       !selectedProfileId ||
       runPhase === "starting" ||
       runPhase === "active" ||
+      runPhase === "awaiting_clarification" ||
       runPhase === "awaiting_approval" ||
       runPhase === "resuming"
     ) {
@@ -476,7 +541,7 @@ export default function App() {
         setStatusMessageKey(statusMessageForPhase("resuming"));
         const run = await api.resumeResearch(currentRun.thread_id, {
         profile_id: selectedProfileId,
-        decision,
+        decision: { ...decision, kind: "plan_approval" },
       });
       setCurrentRun(run);
       if (typeof run.state.report_id === "number") {
@@ -505,6 +570,82 @@ export default function App() {
         setStatusMessageKey(statusMessageForPhase(recoveredPhase));
         setErrorMessage(messageFromError(error, "app.failedToResumeResearch"));
       } finally {
+      resumePendingRef.current = false;
+    }
+  }
+
+  async function handleRenameConversation(conversationId: number, title: string) {
+    try {
+      setErrorMessage(null);
+      const updated = await api.updateConversation(conversationId, title);
+      setConversations((current) => current.map((conversation) => conversation.id === updated.id ? updated : conversation));
+      setActiveConversation((current) => current?.id === updated.id ? { ...current, title: updated.title, updated_at: updated.updated_at } : current);
+    } catch (error) {
+      setErrorMessage(messageFromError(error, "app.failedToRenameConversation"));
+    }
+  }
+
+  async function handleDeleteConversation(conversationId: number) {
+    try {
+      setErrorMessage(null);
+      await api.deleteConversation(conversationId);
+    } catch (error) {
+      setErrorMessage(messageFromError(error, "app.failedToDeleteConversation"));
+      return false;
+    }
+
+    const remaining = conversations.filter((conversation) => conversation.id !== conversationId);
+    if (remaining.length > 0) {
+      setConversations(remaining);
+      if (activeConversationId === conversationId) {
+        setActiveConversationId(remaining[0].id);
+      }
+      return true;
+    }
+
+    setConversations([]);
+    setActiveConversationId(null);
+    try {
+      const created = await api.createConversation(t("conversation.untitled"));
+      setConversations([created]);
+      setActiveConversationId(created.id);
+    } catch (error) {
+      setErrorMessage(messageFromError(error, "app.failedToCreateConversation"));
+    }
+    return true;
+  }
+
+  async function handleClarification(answer: string) {
+    if (
+      !currentRun || !selectedProfileId || !activeConversation || runPhase !== "awaiting_clarification" || resumePendingRef.current
+    ) {
+      return;
+    }
+
+    try {
+      resumePendingRef.current = true;
+      setErrorMessage(null);
+      updateRunPhase("resuming");
+      setStatusMessageKey(statusMessageForPhase("resuming"));
+      const run = await api.resumeResearch(currentRun.thread_id, {
+        profile_id: selectedProfileId,
+        decision: { kind: "clarification", answer },
+      });
+      setCurrentRun(run);
+      const nextPhase = deriveRunPhaseFromResponse(run);
+      updateRunPhase(nextPhase);
+      setStatusMessageKey(statusMessageForPhase(nextPhase));
+      const detail = await api.getConversation(activeConversation.id);
+      setActiveConversation(detail);
+      setConversations((current) => current.map((conversation) => (conversation.id === detail.id ? detail : conversation)));
+    } catch (error) {
+      if (runPhaseRef.current === "completed" || runPhaseRef.current === "failed") {
+        return;
+      }
+      updateRunPhase("awaiting_clarification");
+      setStatusMessageKey(statusMessageForPhase("awaiting_clarification"));
+      setErrorMessage(messageFromError(error, "app.failedToResumeResearch"));
+    } finally {
       resumePendingRef.current = false;
     }
   }
@@ -543,6 +684,23 @@ export default function App() {
     setSettingsLoadErrors((current) => ({ ...current, profiles: null }));
   }
 
+  async function handleUpdateProfile(profileId: number, payload: {
+    name: string;
+    provider: string;
+    base_url?: string | null;
+    model: string;
+    api_key?: string | null;
+    params?: Record<string, unknown> | null;
+    is_default?: boolean;
+  }) {
+    const updated = await api.updateLLMProfile(profileId, payload);
+    setProfiles((current) => current.map((profile) =>
+      profile.id === updated.id ? updated : updated.is_default ? { ...profile, is_default: false } : profile,
+    ));
+    setSelectedProfileId(updated.id);
+    setSettingsLoadErrors((current) => ({ ...current, profiles: null }));
+  }
+
   async function handleTestProfile(profileId: number) {
     return api.testLLMProfile(profileId);
   }
@@ -559,6 +717,12 @@ export default function App() {
     setSettingsLoadErrors((current) => ({ ...current, servers: null }));
   }
 
+  async function handleUpdateServer(serverId: number, payload: Omit<MCPServer, "id">) {
+    const updated = await api.updateMCPServer(serverId, payload);
+    setServers((current) => current.map((server) => server.id === updated.id ? updated : server));
+    setSettingsLoadErrors((current) => ({ ...current, servers: null }));
+  }
+
   const backendDefaultProfile = profiles.find((profile) => profile.is_default) ?? null;
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
 
@@ -572,6 +736,8 @@ export default function App() {
           activeId={activeConversationId}
           onSelect={setActiveConversationId}
           onCreate={handleCreateConversation}
+          onRename={handleRenameConversation}
+          onDelete={handleDeleteConversation}
         />
       }
       main={
@@ -583,9 +749,11 @@ export default function App() {
             maxSources={maxSources}
             onSelectProfile={setSelectedProfileId}
             onCreateProfile={handleCreateProfile}
+            onUpdateProfile={handleUpdateProfile}
             onTestProfile={handleTestProfile}
             onSaveMaxSources={handleSaveMaxSources}
             onCreateServer={handleCreateServer}
+            onUpdateServer={handleUpdateServer}
             loadErrors={settingsLoadErrors}
           />
         ) : (
@@ -601,23 +769,25 @@ export default function App() {
               )}
               {errorMessage ? <div className="mt-1 text-xs text-red-600">{renderLocalizedMessage(t, errorMessage)}</div> : null}
             </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <div className={reportId === null ? "h-full" : "min-h-full"}>
-                <ResearchWorkspace
-                  conversation={activeConversation}
-                  profileId={selectedProfileId}
-                  runPhase={runPhase}
-                  onStart={handleStartResearch}
-                />
-              </div>
-              {reportId !== null ? (
-                <ReportPanel
-                  report={report}
-                  markdownUrl={api.markdownDownloadUrl(reportId)}
-                  pdfUrl={api.pdfDownloadUrl(reportId)}
-                  onLoadReport={handleLoadReport}
-                />
-              ) : null}
+            <div className="min-h-0 flex-1">
+              <ResearchWorkspace
+                conversation={activeConversation}
+                profileId={selectedProfileId}
+                runPhase={runPhase}
+                onStart={handleStartResearch}
+                onClarify={handleClarification}
+                timelineContent={
+                  reportId !== null ? (
+                    <ReportPanel
+                      report={report}
+                      markdownUrl={api.markdownDownloadUrl(reportId)}
+                      pdfUrl={api.pdfDownloadUrl(reportId)}
+                      onLoadReport={handleLoadReport}
+                      embedded
+                    />
+                  ) : null
+                }
+              />
             </div>
           </div>
         )

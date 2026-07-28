@@ -8,17 +8,22 @@ import { I18nProvider } from "./i18n/I18nProvider";
 vi.mock("./api/client", () => ({
   api: {
     createConversation: vi.fn(),
+    updateConversation: vi.fn(),
+    deleteConversation: vi.fn(),
     listConversations: vi.fn(),
     getConversation: vi.fn(),
+    getActiveResearch: vi.fn(),
     startResearch: vi.fn(),
     resumeResearch: vi.fn(),
     listLLMProfiles: vi.fn(),
     createLLMProfile: vi.fn(),
+    updateLLMProfile: vi.fn(),
     testLLMProfile: vi.fn(),
     getPreference: vi.fn(),
     setPreference: vi.fn(),
     listMCPServers: vi.fn(),
     createMCPServer: vi.fn(),
+    updateMCPServer: vi.fn(),
     getReport: vi.fn(),
     markdownDownloadUrl: vi.fn((id: number) => `/api/reports/${id}/download.md`),
     pdfDownloadUrl: vi.fn((id: number) => `/api/reports/${id}/download.pdf`),
@@ -86,6 +91,12 @@ describe("App", () => {
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
     vi.mocked(api.listConversations).mockResolvedValue([conversation]);
+    vi.mocked(api.updateConversation).mockImplementation(async (id, title) => ({
+      ...conversation,
+      id,
+      title,
+    }));
+    vi.mocked(api.deleteConversation).mockResolvedValue(undefined);
     vi.mocked(api.listLLMProfiles).mockResolvedValue([profile]);
     vi.mocked(api.getPreference).mockResolvedValue({ key: "max_sources", value: { value: 8 } });
     vi.mocked(api.listMCPServers).mockResolvedValue([]);
@@ -103,6 +114,7 @@ describe("App", () => {
       enabled: true,
     });
     vi.mocked(api.getConversation).mockResolvedValue(conversationDetail);
+    vi.mocked(api.getActiveResearch).mockResolvedValue(null);
   });
 
   it("updates an existing application status message when the locale changes", async () => {
@@ -120,8 +132,63 @@ describe("App", () => {
     expect(await screen.findByText("准备开始研究。")).toBeInTheDocument();
   });
 
-  it("uses the localized fallback and preserves the backend title when creating in Chinese", async () => {
+  it("restores a pending clarification and submits its answer", async () => {
     const user = userEvent.setup();
+    vi.mocked(api.getConversation).mockResolvedValue({
+      ...conversationDetail,
+      messages: [{ id: 1, role: "assistant", content: "Which region?", meta: null }],
+    });
+    vi.mocked(api.getActiveResearch).mockResolvedValue({
+      thread_id: "clarify-thread",
+      state: {},
+      interrupted: true,
+      interrupt_payload: { kind: "clarification", message: "Which region?" },
+    });
+    vi.mocked(api.resumeResearch).mockResolvedValue({
+      thread_id: "clarify-thread",
+      state: {},
+      interrupted: true,
+      interrupt_payload: { kind: "plan_approval", plan: { summary: "p", options: [] } },
+    });
+
+    render(<I18nProvider><App /></I18nProvider>);
+    await screen.findByText("More research detail required.");
+    await user.type(screen.getByLabelText("Additional research detail"), "Europe in 2025");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(api.resumeResearch).toHaveBeenCalledWith("clarify-thread", {
+      profile_id: 7,
+      decision: { kind: "clarification", answer: "Europe in 2025" },
+    }));
+  });
+
+  it("restores the latest report for a completed historical conversation", async () => {
+    vi.mocked(api.getConversation).mockResolvedValue({
+      ...conversationDetail,
+      status: "completed",
+      messages: [{ id: 1, role: "user", content: "Compare API pricing", meta: null }],
+      projects: [
+        {
+          id: 2,
+          topic: "API pricing",
+          objective: "Compare API pricing",
+          status: "done",
+          created_at: "2026-07-15T10:00:00Z",
+          latest_report_id: 12,
+          latest_report_version: 1,
+        },
+      ],
+    });
+    vi.mocked(api.getReport).mockResolvedValue(completedReport);
+
+    render(<I18nProvider><App /></I18nProvider>);
+
+    expect(await screen.findByRole("heading", { name: "Completed report" })).toBeInTheDocument();
+    expect(screen.getByText("Research completed.")).toBeInTheDocument();
+    expect(api.getReport).toHaveBeenCalledWith(12);
+    expect(api.getActiveResearch).toHaveBeenCalledWith(4);
+  });
+
+  it("uses the localized fallback and preserves the backend title when creating in Chinese", async () => {
     localStorage.setItem("searchagent.locale", "zh-CN");
     vi.mocked(api.listConversations).mockResolvedValue([]);
     vi.mocked(api.createConversation).mockResolvedValue({
@@ -137,14 +204,12 @@ describe("App", () => {
       </I18nProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: "新建" }));
-
-    expect(api.createConversation).toHaveBeenCalledWith("未命名");
     expect(await screen.findByText("未命名")).toBeInTheDocument();
+    expect(api.createConversation).toHaveBeenCalledTimes(1);
+    expect(api.createConversation).toHaveBeenCalledWith("未命名");
   });
 
   it("uses the English fallback when creating a conversation in English", async () => {
-    const user = userEvent.setup();
     vi.mocked(api.listConversations).mockResolvedValue([]);
     vi.mocked(api.createConversation).mockResolvedValue({
       id: 8,
@@ -159,9 +224,29 @@ describe("App", () => {
       </I18nProvider>,
     );
 
-    await user.click(await screen.findByRole("button", { name: "New" }));
-
+    expect(await screen.findByText("Untitled")).toBeInTheDocument();
+    expect(api.createConversation).toHaveBeenCalledTimes(1);
     expect(api.createConversation).toHaveBeenCalledWith("Untitled");
+  });
+
+  it("deletes the last conversation and creates a fresh default conversation", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createConversation).mockResolvedValue({
+      id: 9,
+      title: "Untitled",
+      status: "idle",
+      created_at: "",
+      updated_at: "",
+    });
+
+    render(<I18nProvider><App /></I18nProvider>);
+    await screen.findByText("Search API evaluation");
+    await user.click(screen.getByRole("button", { name: "Delete Search API evaluation" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(api.deleteConversation).toHaveBeenCalledWith(4));
+    expect(api.createConversation).toHaveBeenCalledWith("Untitled");
+    expect(await screen.findByText("Untitled")).toBeInTheDocument();
   });
 
   it("preserves an active run without refetching data when the locale changes", async () => {
@@ -332,7 +417,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(api.resumeResearch).toHaveBeenCalledWith("thread-1", {
         profile_id: 7,
-        decision: { approved: true, chosen_option: "B" },
+        decision: { kind: "plan_approval", approved: true, chosen_option: "B" },
       }),
     );
   });
@@ -419,7 +504,7 @@ describe("App", () => {
     });
 
     expect(await screen.findByText("Plan ready")).toBeInTheDocument();
-    expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
+    expect(screen.getByText("2 plan options prepared")).toBeInTheDocument();
   });
 
   it("renders active-conversation lifecycle progress before starting research resolves", async () => {
@@ -437,7 +522,7 @@ describe("App", () => {
     await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
     await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
     await user.click(screen.getByRole("button", { name: "Start" }));
-    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=0"));
     const conversationSource = MockEventSource.instance;
 
     act(() => {
@@ -473,7 +558,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=0"));
     const conversationSource = MockEventSource.instance;
 
     act(() => {
@@ -521,7 +606,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Research request"), "Compare search APIs");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=0"));
     const conversationSource = MockEventSource.instance;
 
     act(() => {
@@ -585,7 +670,7 @@ describe("App", () => {
     await user.type(request, "Compare search APIs");
     await user.click(startButton);
 
-    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=0"));
     const conversationSource = MockEventSource.instance;
 
     act(() => {
@@ -640,7 +725,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Research request"), "Second request");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
-    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=100"));
+    await waitFor(() => expect(MockEventSource.instance?.url).toBe("/events?conversation_id=4&replay_limit=0"));
     const restartedConversationSource = MockEventSource.instance;
     expect(completedThreadSource?.closed).toBe(true);
     expect(screen.getByRole("heading", { name: "Completed report" })).toBeInTheDocument();
@@ -963,8 +1048,8 @@ describe("App", () => {
     await screen.findByText("Search API evaluation");
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.type(screen.getByLabelText("Profile name"), "Local profile");
-    await user.clear(screen.getByLabelText("Provider"));
-    await user.type(screen.getByLabelText("Provider"), "openai_compatible");
+    await user.selectOptions(screen.getByLabelText("API provider"), "custom");
+    await user.selectOptions(screen.getByLabelText("API compatibility"), "openai_compatible");
     await user.type(screen.getByLabelText("Model"), "qwen");
     await user.type(screen.getByLabelText("Base URL"), "http://localhost:11434/v1");
     await user.type(screen.getByLabelText("API key"), "sk-local");
@@ -1013,6 +1098,7 @@ describe("App", () => {
 
     await user.clear(screen.getByLabelText("MCP server name"));
     await user.type(screen.getByLabelText("MCP server name"), "bocha");
+    await user.selectOptions(screen.getByLabelText("Connection type"), "stdio");
     await user.type(screen.getByLabelText("Command"), "npx");
     await user.clear(screen.getByLabelText("Arguments (one per line)"));
     await user.type(screen.getByLabelText("Arguments (one per line)"), "-y{enter}@humansean/mcp-bocha");

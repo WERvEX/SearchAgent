@@ -25,6 +25,7 @@ function renderLocalizedSettings(overrides: Partial<React.ComponentProps<typeof 
     onTestProfile: vi.fn().mockResolvedValue({ ok: true, error: null }),
     onSaveMaxSources: vi.fn().mockResolvedValue(undefined),
     onCreateServer: vi.fn().mockResolvedValue(undefined),
+    onUpdateServer: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   return render(
@@ -120,8 +121,8 @@ describe("SettingsPanel", () => {
     expect(screen.queryByText("sk-s****")).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Profile name"), "Local OpenAI");
-    await user.clear(screen.getByLabelText("Provider"));
-    await user.type(screen.getByLabelText("Provider"), "openai_compatible");
+    await user.selectOptions(screen.getByLabelText("API provider"), "custom");
+    await user.selectOptions(screen.getByLabelText("API compatibility"), "openai_compatible");
     await user.type(screen.getByLabelText("Model"), "qwen");
     await user.type(screen.getByLabelText("Base URL"), "http://localhost:11434/v1");
     await user.type(screen.getByLabelText("API key"), "sk-local");
@@ -225,6 +226,7 @@ describe("SettingsPanel", () => {
 
     await user.clear(screen.getByLabelText("MCP server name"));
     await user.type(screen.getByLabelText("MCP server name"), "bocha");
+    await user.selectOptions(screen.getByLabelText("Connection type"), "stdio");
     await user.type(screen.getByLabelText("Command"), "npx");
     await user.clear(screen.getByLabelText("Arguments (one per line)"));
     await user.type(screen.getByLabelText("Arguments (one per line)"), "-y{enter}@humansean/mcp-bocha");
@@ -243,7 +245,8 @@ describe("SettingsPanel", () => {
       }),
     );
     expect(await screen.findByText("MCP server saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Environment variables (KEY=value)")).toHaveValue("");
+    expect(screen.getByLabelText("Connection type")).toHaveValue("http");
+    expect(screen.queryByLabelText("Environment variables (KEY=value)")).not.toBeInTheDocument();
   });
 
   it("sends the HTTP MCP payload with null command and args", async () => {
@@ -265,7 +268,6 @@ describe("SettingsPanel", () => {
     );
 
     await user.type(screen.getByLabelText("MCP server name"), "remote-tools");
-    await user.selectOptions(screen.getByLabelText("Transport"), "http");
     await user.type(screen.getByLabelText("URL"), "http://localhost:9000/mcp");
     await user.click(screen.getByRole("button", { name: "Save server" }));
 
@@ -277,6 +279,60 @@ describe("SettingsPanel", () => {
         args: null,
         env: null,
         url: "http://localhost:9000/mcp",
+        enabled: true,
+      }),
+    );
+  });
+
+  it("prefills provider settings and edits an MCP server without exposing its stored secret", async () => {
+    const user = userEvent.setup();
+    const onUpdateServer = vi.fn().mockResolvedValue(undefined);
+    renderLocalizedSettings({
+      servers: [
+        {
+          id: 9,
+          name: "bocha",
+          transport: "stdio",
+          command: "npx",
+          args: ["-y", "@humansean/mcp-bocha"],
+          env: { BOCHA_API_KEY: "secr****" },
+          url: null,
+          enabled: true,
+        },
+      ],
+      onUpdateServer,
+    });
+
+    await user.selectOptions(screen.getByLabelText("API provider"), "deepseek");
+    expect(screen.getByLabelText("API compatibility")).toHaveValue("openai_compatible");
+    expect(screen.getByLabelText("Base URL")).toHaveValue("https://api.deepseek.com");
+    expect(screen.getByLabelText("Model")).toHaveValue("deepseek-v4-flash");
+
+    await user.selectOptions(screen.getByLabelText("API compatibility"), "anthropic");
+    expect(screen.getByLabelText("Base URL")).toHaveValue("https://api.deepseek.com/anthropic");
+
+    await user.selectOptions(screen.getByLabelText("API provider"), "mimo");
+    await user.selectOptions(screen.getByLabelText("API compatibility"), "anthropic");
+    expect(screen.getByLabelText("API provider")).toHaveValue("custom");
+    expect(screen.getByLabelText("Base URL")).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "Edit server" }));
+    expect(screen.getByLabelText("MCP server name")).toHaveValue("bocha");
+    expect(screen.getByLabelText("Command")).toHaveValue("npx");
+    expect(screen.getByLabelText("Environment variables (KEY=value)")).toHaveValue("");
+
+    await user.clear(screen.getByLabelText("Command"));
+    await user.type(screen.getByLabelText("Command"), "uvx");
+    await user.click(screen.getByRole("button", { name: "Save server" }));
+
+    await waitFor(() =>
+      expect(onUpdateServer).toHaveBeenCalledWith(9, {
+        name: "bocha",
+        transport: "stdio",
+        command: "uvx",
+        args: ["-y", "@humansean/mcp-bocha"],
+        env: null,
+        url: null,
         enabled: true,
       }),
     );

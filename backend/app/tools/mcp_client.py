@@ -27,6 +27,14 @@ def build_mcp_connections(session: Session) -> dict[str, dict]:
     for server in svc.list_mcp_servers(session):
         if not server["enabled"]:
             continue
+        if (
+            server["name"] == BOCHA_SERVER_NAME
+            and server["command"] == "npx"
+            and BOCHA_NPM_PACKAGE in (server["args"] or [])
+        ):
+            # The legacy community package is incompatible with current MCP SDKs.
+            # registry.py exposes the same saved key through the first-party HTTPS tool.
+            continue
 
         transport = _normalize_transport(server["transport"])
         if transport == "stdio":

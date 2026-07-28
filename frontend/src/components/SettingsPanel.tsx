@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, PlugZap, Save } from "lucide-react";
+import { Check, Pencil, PlugZap, Save, X } from "lucide-react";
 import type { LLMProfileCreate, LLMProfileRead, MCPServer } from "../api/types";
 import { useI18n } from "../i18n/I18nProvider";
 import {
@@ -25,9 +25,11 @@ type SettingsPanelProps = {
   loadErrors?: SettingsLoadErrors;
   onSelectProfile: (profileId: number) => void;
   onCreateProfile: (payload: LLMProfileCreate) => Promise<void> | void;
+  onUpdateProfile?: (profileId: number, payload: LLMProfileCreate) => Promise<void> | void;
   onTestProfile: (profileId: number) => Promise<{ ok: boolean; error: string | null }>;
   onSaveMaxSources: (value: number) => Promise<void> | void;
   onCreateServer: (payload: Omit<MCPServer, "id">) => Promise<void> | void;
+  onUpdateServer?: (serverId: number, payload: Omit<MCPServer, "id">) => Promise<void> | void;
 };
 
 type Feedback = {
@@ -36,6 +38,82 @@ type Feedback = {
 };
 
 type ParseResult<T> = { value: T; error: MessageKey | null };
+
+type Compatibility = "openai_compatible" | "anthropic";
+
+const API_PROVIDER_PRESETS = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    compatibility: "openai_compatible" as Compatibility,
+    urls: { openai_compatible: "https://api.openai.com/v1" },
+    model: "",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    compatibility: "anthropic" as Compatibility,
+    urls: { anthropic: "https://api.anthropic.com" },
+    model: "",
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    compatibility: "openai_compatible" as Compatibility,
+    urls: {
+      openai_compatible: "https://api.deepseek.com",
+      anthropic: "https://api.deepseek.com/anthropic",
+    },
+    model: "deepseek-v4-flash",
+  },
+  {
+    id: "mimo",
+    label: "Xiaomi MiMo",
+    compatibility: "openai_compatible" as Compatibility,
+    urls: { openai_compatible: "https://api.xiaomimimo.com/v1" },
+    model: "mimo-v2.5-pro",
+  },
+  {
+    id: "qwen",
+    label: "Alibaba Qwen",
+    compatibility: "openai_compatible" as Compatibility,
+    urls: {
+      openai_compatible: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      anthropic: "https://dashscope.aliyuncs.com/apps/anthropic",
+    },
+    model: "",
+  },
+  {
+    id: "custom",
+    label: "Custom",
+    compatibility: "openai_compatible" as Compatibility,
+    urls: {},
+    model: "",
+  },
+] as const;
+
+function normalizeCompatibility(provider: string): Compatibility {
+  return provider === "anthropic" ? "anthropic" : "openai_compatible";
+}
+
+function inferProviderPreset(profile: Pick<LLMProfileRead, "provider" | "base_url">): string {
+  const compatibility = normalizeCompatibility(profile.provider);
+  return API_PROVIDER_PRESETS.find((preset) =>
+    preset.id !== "custom" && preset.urls[compatibility as keyof typeof preset.urls] === profile.base_url
+  )?.id ?? "custom";
+}
+
+function emptyServerForm() {
+  return {
+    name: "",
+    transport: "http",
+    command: "",
+    argsText: "",
+    envText: "",
+    url: "",
+    enabled: true,
+  };
+}
 
 function feedbackClassName(tone: Feedback["tone"]) {
   return tone === "error" ? "text-red-600" : "text-emerald-700";
@@ -107,31 +185,29 @@ export function SettingsPanel({
   loadErrors,
   onSelectProfile,
   onCreateProfile,
+  onUpdateProfile,
   onTestProfile,
   onSaveMaxSources,
   onCreateServer,
+  onUpdateServer,
 }: SettingsPanelProps) {
   const { t } = useI18n();
   const [profileForm, setProfileForm] = useState({
     name: "",
-    provider: "openai",
-    base_url: "",
+    provider: "openai_compatible" as Compatibility,
+    base_url: "https://api.openai.com/v1",
     model: "",
     api_key: "",
     paramsJson: "",
     is_default: profiles.length === 0,
   });
-  const [serverForm, setServerForm] = useState({
-    name: "",
-    transport: "stdio",
-    command: "",
-    argsText: "",
-    envText: "",
-    url: "",
-  });
+  const [providerPresetId, setProviderPresetId] = useState("openai");
+  const [serverForm, setServerForm] = useState(emptyServerForm);
   const [maxSourcesInput, setMaxSourcesInput] = useState(String(maxSources));
   const [profileFeedback, setProfileFeedback] = useState<Feedback | null>(null);
-  const [profileTestFeedback, setProfileTestFeedback] = useState<Feedback | null>(null);
+  const [profileTestFeedback, setProfileTestFeedback] = useState<Record<number, Feedback>>({});
+  const [editingProfileId, setEditingProfileId] = useState<number | null>(null);
+  const [editingServerId, setEditingServerId] = useState<number | null>(null);
   const [maxSourcesFeedback, setMaxSourcesFeedback] = useState<Feedback | null>(null);
   const [serverFeedback, setServerFeedback] = useState<Feedback | null>(null);
   const [profileSubmitting, setProfileSubmitting] = useState(false);
@@ -179,7 +255,6 @@ export function SettingsPanel({
   async function handleProfileSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setProfileFeedback(null);
-    setProfileTestFeedback(null);
 
     if (profileValidation !== null) {
       setProfileFeedback({ tone: "error", message: localizedMessage(profileValidation) });
@@ -188,7 +263,7 @@ export function SettingsPanel({
 
     setProfileSubmitting(true);
     try {
-      await onCreateProfile({
+      const payload = {
         name: profileForm.name.trim(),
         provider: profileForm.provider.trim(),
         base_url: profileForm.base_url.trim() || null,
@@ -196,17 +271,27 @@ export function SettingsPanel({
         api_key: profileForm.api_key.trim() || null,
         params: profileParams.value,
         is_default: profiles.length === 0 ? true : profileForm.is_default,
-      });
+      };
+      if (editingProfileId === null) {
+        await onCreateProfile(payload);
+      } else {
+        if (!onUpdateProfile) {
+          throw new Error("Profile editing is unavailable")
+        }
+        await onUpdateProfile(editingProfileId, payload);
+      }
       setProfileFeedback({ tone: "success", message: localizedMessage("feedback.profileSaved") });
       setProfileForm({
         name: "",
-        provider: "openai",
-        base_url: "",
+        provider: "openai_compatible",
+        base_url: "https://api.openai.com/v1",
         model: "",
         api_key: "",
         paramsJson: "",
         is_default: false,
       });
+      setProviderPresetId("openai");
+      setEditingProfileId(null);
     } catch (error) {
       setProfileFeedback({
         tone: "error",
@@ -219,26 +304,77 @@ export function SettingsPanel({
 
   async function handleProfileTest(profileId: number) {
     setProfileFeedback(null);
-    setProfileTestFeedback(null);
+    setProfileTestFeedback((current) => {
+      const next = { ...current };
+      delete next[profileId];
+      return next;
+    });
     setProfileTestingId(profileId);
     try {
       const result = await onTestProfile(profileId);
-      setProfileTestFeedback(
-        result.ok
+      setProfileTestFeedback((current) => ({
+        ...current,
+        [profileId]: result.ok
           ? { tone: "success", message: localizedMessage("feedback.connectionOk") }
           : {
               tone: "error",
               message: result.error ? rawMessage(result.error) : localizedMessage("feedback.connectionFailed"),
             },
-      );
+      }));
     } catch (error) {
-      setProfileTestFeedback({
-        tone: "error",
-        message: messageFromError(error, "feedback.failedTestProfile"),
-      });
+      setProfileTestFeedback((current) => ({
+        ...current,
+        [profileId]: { tone: "error", message: messageFromError(error, "feedback.failedTestProfile") },
+      }));
     } finally {
       setProfileTestingId(null);
     }
+  }
+
+  function handleEditProfile(profile: LLMProfileRead) {
+    setEditingProfileId(profile.id);
+    setProfileFeedback(null);
+    setProfileForm({
+      name: profile.name,
+      provider: normalizeCompatibility(profile.provider),
+      base_url: profile.base_url ?? "",
+      model: profile.model,
+      api_key: "",
+      paramsJson: profile.params ? JSON.stringify(profile.params, null, 2) : "",
+      is_default: profile.is_default,
+    });
+    setProviderPresetId(inferProviderPreset(profile));
+  }
+
+  function cancelProfileEdit() {
+    setEditingProfileId(null);
+    setProfileFeedback(null);
+    setProviderPresetId("openai");
+    setProfileForm({ name: "", provider: "openai_compatible", base_url: "https://api.openai.com/v1", model: "", api_key: "", paramsJson: "", is_default: false });
+  }
+
+  function handleProviderPresetChange(presetId: string) {
+    const preset = API_PROVIDER_PRESETS.find((item) => item.id === presetId) ?? API_PROVIDER_PRESETS.at(-1)!;
+    setProviderPresetId(preset.id);
+    setProfileForm((current) => ({
+      ...current,
+      provider: preset.compatibility,
+      base_url: preset.urls[preset.compatibility as keyof typeof preset.urls] ?? "",
+      model: preset.model,
+    }));
+  }
+
+  function handleCompatibilityChange(compatibility: Compatibility) {
+    const preset = API_PROVIDER_PRESETS.find((item) => item.id === providerPresetId);
+    const presetUrl = preset?.urls[compatibility as keyof typeof preset.urls];
+    if (preset && preset.id !== "custom" && !presetUrl) {
+      setProviderPresetId("custom");
+    }
+    setProfileForm((current) => ({
+      ...current,
+      provider: compatibility,
+      base_url: preset?.id === "custom" ? current.base_url : presetUrl ?? "",
+    }));
   }
 
   async function handleMaxSourcesSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -276,24 +412,26 @@ export function SettingsPanel({
     setServerSubmitting(true);
     try {
       const args = serverForm.transport === "stdio" ? parseLines(serverForm.argsText) : [];
-      await onCreateServer({
+      const payload = {
         name: serverForm.name.trim(),
         transport: serverForm.transport,
         command: serverForm.transport === "stdio" ? serverForm.command.trim() : null,
         args: serverForm.transport === "stdio" && args.length > 0 ? args : null,
         env: serverEnv.value,
         url: serverForm.transport === "stdio" ? null : serverForm.url.trim(),
-        enabled: true,
-      });
+        enabled: serverForm.enabled,
+      };
+      if (editingServerId === null) {
+        await onCreateServer(payload);
+      } else {
+        if (!onUpdateServer) {
+          throw new Error("MCP server editing is unavailable");
+        }
+        await onUpdateServer(editingServerId, payload);
+      }
       setServerFeedback({ tone: "success", message: localizedMessage("feedback.serverSaved") });
-      setServerForm({
-        name: "",
-        transport: "stdio",
-        command: "",
-        argsText: "",
-        envText: "",
-        url: "",
-      });
+      setServerForm(emptyServerForm());
+      setEditingServerId(null);
     } catch (error) {
       setServerFeedback({
         tone: "error",
@@ -302,6 +440,26 @@ export function SettingsPanel({
     } finally {
       setServerSubmitting(false);
     }
+  }
+
+  function handleEditServer(server: MCPServer) {
+    setEditingServerId(server.id);
+    setServerFeedback(null);
+    setServerForm({
+      name: server.name,
+      transport: server.transport === "stdio" ? "stdio" : "http",
+      command: server.command ?? "",
+      argsText: server.args?.join("\n") ?? "",
+      envText: "",
+      url: server.url ?? "",
+      enabled: server.enabled,
+    });
+  }
+
+  function cancelServerEdit() {
+    setEditingServerId(null);
+    setServerFeedback(null);
+    setServerForm(emptyServerForm());
   }
 
   return (
@@ -316,7 +474,7 @@ export function SettingsPanel({
           <form className="space-y-4 border border-zinc-200 bg-white p-4" onSubmit={handleProfileSubmit} aria-busy={profileSubmitting}>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold text-zinc-950">{t("settings.profiles")}</h2>
+                <h2 className="text-sm font-semibold text-zinc-950">{editingProfileId === null ? t("settings.profiles") : t("settings.editProfile")}</h2>
                 <p className="mt-1 text-xs text-zinc-500">{t("settings.profilesDescription")}</p>
               </div>
             </div>
@@ -332,13 +490,31 @@ export function SettingsPanel({
                 />
               </label>
               <label className="grid gap-1 text-sm text-zinc-700">
-                <span>{t("settings.provider")}</span>
-                <input
-                  aria-label={t("settings.provider")}
+                <span>{t("settings.apiProvider")}</span>
+                <select
+                  aria-label={t("settings.apiProvider")}
+                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                  value={providerPresetId}
+                  onChange={(event) => handleProviderPresetChange(event.target.value)}
+                >
+                  {API_PROVIDER_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.id === "custom" ? t("settings.customProvider") : preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm text-zinc-700">
+                <span>{t("settings.compatibility")}</span>
+                <select
+                  aria-label={t("settings.compatibility")}
                   className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
                   value={profileForm.provider}
-                  onChange={(event) => setProfileForm((current) => ({ ...current, provider: event.target.value }))}
-                />
+                  onChange={(event) => handleCompatibilityChange(event.target.value as Compatibility)}
+                >
+                  <option value="openai_compatible">{t("settings.openaiCompatible")}</option>
+                  <option value="anthropic">{t("settings.anthropicCompatible")}</option>
+                </select>
               </label>
               <label className="grid gap-1 text-sm text-zinc-700">
                 <span>{t("settings.model")}</span>
@@ -384,15 +560,18 @@ export function SettingsPanel({
               </label>
             </div>
 
-            <label className="grid gap-1 text-sm text-zinc-700">
-              <span>{t("settings.advancedParams")}</span>
-              <textarea
-                aria-label={t("settings.advancedParams")}
-                className="min-h-24 rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                value={profileForm.paramsJson}
-                onChange={(event) => setProfileForm((current) => ({ ...current, paramsJson: event.target.value }))}
-              />
-            </label>
+            <details className="rounded-md border border-zinc-200 px-3 py-2">
+              <summary className="cursor-pointer text-sm text-zinc-700">{t("settings.advancedOptions")}</summary>
+              <label className="mt-3 grid gap-1 text-sm text-zinc-700">
+                <span>{t("settings.advancedParams")}</span>
+                <textarea
+                  aria-label={t("settings.advancedParams")}
+                  className="min-h-24 rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                  value={profileForm.paramsJson}
+                  onChange={(event) => setProfileForm((current) => ({ ...current, paramsJson: event.target.value }))}
+                />
+              </label>
+            </details>
 
             {profileFeedback ? (
               <p role={profileFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(profileFeedback.tone)}`}>
@@ -400,17 +579,17 @@ export function SettingsPanel({
               </p>
             ) : null}
             {loadErrors?.profiles ? <p role="alert" className="text-sm text-red-600">{renderLocalizedMessage(t, loadErrors.profiles)}</p> : null}
-            {profileTestFeedback ? (
-              <p role={profileTestFeedback.tone === "error" ? "alert" : "status"} className={`text-sm ${feedbackClassName(profileTestFeedback.tone)}`}>
-                {renderLocalizedMessage(t, profileTestFeedback.message)}
-              </p>
-            ) : null}
-
             <div className="flex flex-wrap items-center gap-3">
               <button type="submit" className="nav-button-active" disabled={!canSubmitProfile}>
                 <Save className="h-4 w-4" aria-hidden="true" />
                 {profileSubmitting ? t("settings.saving") : t("settings.saveProfile")}
               </button>
+              {editingProfileId !== null ? (
+                <button type="button" className="nav-button" onClick={cancelProfileEdit}>
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  {t("settings.cancelEdit")}
+                </button>
+              ) : null}
               {profileValidation ? <span className="text-xs text-zinc-500">{t(profileValidation)}</span> : null}
             </div>
           </form>
@@ -447,7 +626,9 @@ export function SettingsPanel({
                           ) : null}
                         </div>
                         <div className="mt-1 text-xs text-zinc-500">
-                          {profile.provider} · {profile.model}
+                          {t(normalizeCompatibility(profile.provider) === "anthropic"
+                            ? "settings.anthropicCompatible"
+                            : "settings.openaiCompatible")} · {profile.model}
                           {profile.base_url ? ` · ${profile.base_url}` : ""}
                         </div>
                       </div>
@@ -463,6 +644,15 @@ export function SettingsPanel({
                       <PlugZap className="h-4 w-4" aria-hidden="true" />
                       {profileTestingId === profile.id ? t("settings.testing") : t("settings.testProfile", { name: profile.name })}
                     </button>
+                    <button type="button" className="nav-button" onClick={() => handleEditProfile(profile)}>
+                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                      {t("settings.editProfile", { name: profile.name })}
+                    </button>
+                    {profileTestFeedback[profile.id] ? (
+                      <p role={profileTestFeedback[profile.id].tone === "error" ? "alert" : "status"} className={`w-full text-sm ${feedbackClassName(profileTestFeedback[profile.id].tone)}`}>
+                        {renderLocalizedMessage(t, profileTestFeedback[profile.id].message)}
+                      </p>
+                    ) : null}
                   </div>
                 ))
               )}
@@ -506,7 +696,9 @@ export function SettingsPanel({
 
           <form className="space-y-4 border border-zinc-200 bg-white p-4" onSubmit={handleServerSubmit} aria-busy={serverSubmitting}>
             <div>
-              <h2 className="text-sm font-semibold text-zinc-950">{t("settings.mcpServers")}</h2>
+              <h2 className="text-sm font-semibold text-zinc-950">
+                {editingServerId === null ? t("settings.mcpServers") : t("settings.editServer")}
+              </h2>
               <p className="mt-1 text-xs text-zinc-500">{t("settings.mcpDescription")}</p>
             </div>
 
@@ -522,15 +714,15 @@ export function SettingsPanel({
               </label>
 
               <label className="grid gap-1 text-sm text-zinc-700">
-                <span>{t("settings.transport")}</span>
+                <span>{t("settings.connectionType")}</span>
                 <select
-                  aria-label={t("settings.transport")}
+                  aria-label={t("settings.connectionType")}
                   className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
                   value={serverForm.transport}
                   onChange={(event) => setServerForm((current) => ({ ...current, transport: event.target.value }))}
                 >
-                  <option value="stdio">stdio</option>
-                  <option value="http">http</option>
+                  <option value="http">{t("settings.remoteUrl")}</option>
+                  <option value="stdio">{t("settings.localCommand")}</option>
                 </select>
               </label>
 
@@ -543,15 +735,6 @@ export function SettingsPanel({
                       className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
                       value={serverForm.command}
                       onChange={(event) => setServerForm((current) => ({ ...current, command: event.target.value }))}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-zinc-700">
-                    <span>{t("settings.arguments")}</span>
-                    <textarea
-                      aria-label={t("settings.arguments")}
-                      className="min-h-24 rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                      value={serverForm.argsText}
-                      onChange={(event) => setServerForm((current) => ({ ...current, argsText: event.target.value }))}
                     />
                   </label>
                 </>
@@ -567,14 +750,43 @@ export function SettingsPanel({
                 </label>
               )}
 
-              <label className="grid gap-1 text-sm text-zinc-700">
-                <span>{t("settings.environment")}</span>
-                <textarea
-                  aria-label={t("settings.environment")}
-                  className="min-h-24 rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                  value={serverForm.envText}
-                  onChange={(event) => setServerForm((current) => ({ ...current, envText: event.target.value }))}
+              {serverForm.transport === "stdio" ? (
+                <details className="rounded-md border border-zinc-200 px-3 py-2">
+                  <summary className="cursor-pointer text-sm text-zinc-700">{t("settings.advancedOptions")}</summary>
+                  <div className="mt-3 grid gap-3">
+                    <label className="grid gap-1 text-sm text-zinc-700">
+                      <span>{t("settings.arguments")}</span>
+                      <textarea
+                        aria-label={t("settings.arguments")}
+                        className="min-h-20 rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                        value={serverForm.argsText}
+                        onChange={(event) => setServerForm((current) => ({ ...current, argsText: event.target.value }))}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-sm text-zinc-700">
+                      <span>{t("settings.environment")}</span>
+                      <textarea
+                        aria-label={t("settings.environment")}
+                        className="min-h-20 rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                        value={serverForm.envText}
+                        onChange={(event) => setServerForm((current) => ({ ...current, envText: event.target.value }))}
+                      />
+                      {editingServerId !== null ? (
+                        <span className="text-xs text-zinc-500">{t("settings.keepStoredSecrets")}</span>
+                      ) : null}
+                    </label>
+                  </div>
+                </details>
+              ) : null}
+
+              <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                <input
+                  type="checkbox"
+                  aria-label={t("settings.serverEnabled")}
+                  checked={serverForm.enabled}
+                  onChange={(event) => setServerForm((current) => ({ ...current, enabled: event.target.checked }))}
                 />
+                <span>{t("settings.serverEnabled")}</span>
               </label>
             </div>
 
@@ -586,10 +798,18 @@ export function SettingsPanel({
               </p>
             ) : null}
 
-            <button type="submit" className="nav-button-active" disabled={!canSubmitServer}>
-              <Save className="h-4 w-4" aria-hidden="true" />
-              {serverSubmitting ? t("settings.saving") : t("settings.saveServer")}
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button type="submit" className="nav-button-active" disabled={!canSubmitServer}>
+                <Save className="h-4 w-4" aria-hidden="true" />
+                {serverSubmitting ? t("settings.saving") : t("settings.saveServer")}
+              </button>
+              {editingServerId !== null ? (
+                <button type="button" className="nav-button" onClick={cancelServerEdit}>
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  {t("settings.cancelEdit")}
+                </button>
+              ) : null}
+            </div>
           </form>
 
           <section className="border border-zinc-200 bg-white">
@@ -601,20 +821,28 @@ export function SettingsPanel({
                 <p className="px-4 py-4 text-sm text-zinc-500">{t("settings.noServers")}</p>
               ) : (
                 servers.map((server) => (
-                  <div key={server.id} className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium text-zinc-950">{server.name}</span>
-                      <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">{server.transport}</span>
-                      {!server.enabled ? <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">{t("settings.disabled")}</span> : null}
+                  <div key={server.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-zinc-950">{server.name}</span>
+                        <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+                          {server.transport === "stdio" ? t("settings.localCommand") : t("settings.remoteUrl")}
+                        </span>
+                        {!server.enabled ? <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">{t("settings.disabled")}</span> : null}
+                      </div>
+                      <div className="mt-1 break-all text-xs text-zinc-500">
+                        {server.transport === "stdio"
+                          ? [server.command, server.args?.join(" ")].filter(Boolean).join(" ")
+                          : server.url ?? t("settings.noUrl")}
+                      </div>
+                      {server.env ? (
+                        <div className="mt-1 text-xs text-zinc-500">{t("settings.envKeys", { keys: Object.keys(server.env).join(", ") })}</div>
+                      ) : null}
                     </div>
-                    <div className="mt-1 text-xs text-zinc-500">
-                      {server.transport === "stdio"
-                        ? [server.command, server.args?.join(" ")].filter(Boolean).join(" ")
-                        : server.url ?? t("settings.noUrl")}
-                    </div>
-                    {server.env ? (
-                      <div className="mt-1 text-xs text-zinc-500">{t("settings.envKeys", { keys: Object.keys(server.env).join(", ") })}</div>
-                    ) : null}
+                    <button type="button" className="nav-button shrink-0" onClick={() => handleEditServer(server)}>
+                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                      {t("settings.editServer")}
+                    </button>
                   </div>
                 ))
               )}

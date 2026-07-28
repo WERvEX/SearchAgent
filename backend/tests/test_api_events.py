@@ -74,6 +74,63 @@ def test_event_bus_replays_only_events_after_last_event_id_and_stays_live(app_ho
     assert next(subscriber) == third
 
 
+def test_event_bus_with_zero_replay_only_receives_new_events(app_home):
+    from queue import Queue
+    from threading import Thread
+    from time import sleep
+
+    from app.core.events import EventBus
+
+    bus = EventBus(history_size=10)
+    bus.publish({"type": "research.started", "data": {"run_id": "old"}})
+    subscriber = bus.subscribe(replay_limit=0)
+    received: Queue[dict] = Queue()
+    reader = Thread(target=lambda: received.put(next(subscriber)), daemon=True)
+    reader.start()
+    for _ in range(100):
+        if bus._subscribers:
+            break
+        sleep(0.01)
+    assert bus._subscribers
+
+    live = bus.publish({"type": "research.started", "data": {"run_id": "new"}})
+
+    assert received.get(timeout=1) == live
+    reader.join(timeout=1)
+
+
+def test_event_bus_drops_old_events_for_a_slow_subscriber(app_home):
+    from queue import Queue
+    from threading import Thread
+    from time import sleep
+
+    from app.core.events import EventBus
+
+    bus = EventBus(history_size=2)
+    subscriber = bus.subscribe(replay_limit=0)
+    received: Queue[dict] = Queue()
+    reader = Thread(target=lambda: received.put(next(subscriber)), daemon=True)
+    reader.start()
+    for _ in range(100):
+        if bus._subscribers:
+            break
+        sleep(0.01)
+    assert bus._subscribers
+
+    first = bus.publish({"type": "research.progress", "data": {"seq": 1}})
+    assert received.get(timeout=1) == first
+
+    queued = next(iter(bus._subscribers))
+    second = bus.publish({"type": "research.progress", "data": {"seq": 2}})
+    third = bus.publish({"type": "research.progress", "data": {"seq": 3}})
+    fourth = bus.publish({"type": "research.progress", "data": {"seq": 4}})
+
+    assert queued.maxsize == 2
+    assert [queued.get_nowait(), queued.get_nowait()] == [third, fourth]
+    assert second["id"] < third["id"] < fourth["id"]
+    subscriber.close()
+
+
 def test_event_bus_filters_replay_and_live_events_by_thread_id(app_home):
     from app.core.events import EventBus
 

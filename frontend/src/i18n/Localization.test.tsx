@@ -24,6 +24,8 @@ describe("frontend localization", () => {
           activeId={1}
           onSelect={vi.fn()}
           onCreate={vi.fn()}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
         />
         <ResearchWorkspace
           conversation={{

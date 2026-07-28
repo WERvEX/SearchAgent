@@ -12,7 +12,10 @@ class _FakeGraphLLM:
 
         r = _R()
         text = str(prompt).lower()
-        if "plan" in text:
+        if "use the available tools" in text:
+            r.content = ""
+            r.tool_calls = [{"name": "search_web", "args": {"query": "renewable energy"}}]
+        elif "plan" in text:
             r.content = (
                 '{"summary": "计划摘要", "options": [{"id": "A", "label": "全面"}, '
                 '{"id": "B", "label": "聚焦"}]}'
@@ -45,11 +48,23 @@ def test_compile_graph_has_interrupt_after_plan(session):
     assert hasattr(graph, "invoke")
 
 
-def test_graph_pauses_at_plan_interrupt(session):
+def test_graph_pauses_at_plan_interrupt(session, monkeypatch):
     from app.db.models import Conversation, ResearchProject
     from app.engine.graph import compile_research_graph
     from app.engine.context import EngineContext
     from app.engine import checkpointer
+    from app.tools import registry
+
+    class _FakeSearchTool:
+        name = "search_web"
+
+        def invoke(self, args):
+            return [{"title": "Source", "url": "https://example.com", "snippet": "Evidence"}]
+
+    async def fake_get_research_tools(_session):
+        return {"tools": [_FakeSearchTool()], "errors": []}
+
+    monkeypatch.setattr(registry, "get_research_tools", fake_get_research_tools)
 
     conv = Conversation(title="c")
     session.add(conv)

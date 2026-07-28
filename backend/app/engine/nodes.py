@@ -39,7 +39,24 @@ def _latest_user_message(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, dict) and msg.get("role") == "user":
             return str(msg.get("content", ""))
+        if getattr(msg, "type", None) in ("human", "user"):
+            return str(getattr(msg, "content", ""))
     return ""
+
+
+def _conversation_context(messages: list) -> str:
+    lines = []
+    for message in messages[-12:]:
+        if isinstance(message, dict):
+            role = str(message.get("role", "user"))
+            content = str(message.get("content", "")).strip()
+        else:
+            message_type = getattr(message, "type", "user")
+            role = {"human": "user", "ai": "assistant"}.get(message_type, str(message_type))
+            content = str(getattr(message, "content", "")).strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)
 
 
 def _extract_objective(response_text: str, user_message: str) -> str | None:
@@ -137,6 +154,8 @@ def _response_tool_calls(response: Any) -> list[Any]:
 
 
 def _invoke_tool(tool: Any, args: dict) -> Any:
+    if hasattr(tool, "ainvoke"):
+        return _run_async(tool.ainvoke(args))
     if hasattr(tool, "invoke"):
         return _run_async(tool.invoke(args))
     if callable(tool):
@@ -145,6 +164,8 @@ def _invoke_tool(tool: Any, args: dict) -> Any:
 
 
 def _iter_source_items(result: Any, *, tool_name: str, args: dict) -> list[dict]:
+    if isinstance(result, str) and result.startswith("Error fetching "):
+        return []
     if isinstance(result, dict):
         if isinstance(result.get("results"), list):
             candidates = result["results"]
@@ -175,7 +196,7 @@ def _iter_source_items(result: Any, *, tool_name: str, args: dict) -> list[dict]
             {
                 "title": str(args.get("title") or args["url"]),
                 "url": str(args["url"]),
-                "snippet": None,
+                "snippet": result if isinstance(result, str) else None,
                 "tool_name": tool_name,
             }
         )
@@ -229,7 +250,16 @@ def _mark_acceptance_criteria(steps: list[dict], findings: list[dict]) -> list[d
     return updated_steps
 
 
-def _build_report_markdown(state: ResearchState) -> str:
+def _report_references(findings: list[dict]) -> list[str]:
+    lines = ["", "## 参考来源", ""]
+    for idx, finding in enumerate(findings, start=1):
+        title = finding.get("title") or finding.get("url") or f"来源 {idx}"
+        url = finding.get("url", "")
+        lines.append(f"[^{idx}]: [{title}]({url})")
+    return lines
+
+
+def _build_report_markdown(state: ResearchState, analysis_md: str | None = None) -> str:
     findings = state.get("findings", [])
     lines = [
         "# 研究报告",
@@ -238,25 +268,85 @@ def _build_report_markdown(state: ResearchState) -> str:
         "",
         state.get("objective", ""),
         "",
-        "## 主要发现",
-        "",
     ]
 
-    if not findings:
-        lines.append("暂无可引用发现。")
-    for idx, finding in enumerate(findings, start=1):
-        title = finding.get("title") or finding.get("url") or f"来源 {idx}"
-        snippet = finding.get("snippet") or ""
-        lines.append(f"- {title}[^{idx}] {snippet}")
-
-    if findings:
-        lines.extend(["", "## 参考来源", ""])
+    analysis_md = str(analysis_md or "").strip()
+    if analysis_md:
+        lines.extend([analysis_md, ""])
+    else:
+        lines.extend(["## 主要发现", ""])
+        if not findings:
+            lines.append("暂无可引用发现。")
         for idx, finding in enumerate(findings, start=1):
             title = finding.get("title") or finding.get("url") or f"来源 {idx}"
-            url = finding.get("url", "")
-            lines.append(f"[^{idx}]: {title} - {url}")
+            url = finding.get("url") or ""
+            snippet = finding.get("snippet") or ""
+            linked_title = f"[{title}]({url})" if url else str(title)
+            lines.append(f"- {linked_title} [^{idx}] {snippet}")
+
+    if findings:
+        lines.extend(_report_references(findings))
 
     return "\n".join(lines).strip() + "\n"
+
+
+def _normalize_report_analysis(content: str, source_count: int) -> str | None:
+    content = str(content or "").strip()
+    content = re.sub(r"^#\s+研究报告\s*", "", content)
+    content = re.split(r"\n##\s*参考来源\b", content, maxsplit=1)[0].strip()
+
+    def _normalize_citation(match: re.Match[str]) -> str:
+        source_id = int(match.group(1))
+        return f"[^{source_id}]" if 1 <= source_id <= source_count else match.group(0)
+
+    content = re.sub(r"(?<!\^)\[(\d+)\]", _normalize_citation, content)
+    if len(content) < 100 or not re.search(r"\[\^\d+\]", content):
+        return None
+    if "## " not in content:
+        content = f"## 综合分析\n\n{content}"
+    return content
+
+
+def _synthesize_report(ctx: EngineContext, state: ResearchState) -> str | None:
+    findings = state.get("findings", [])
+    evidence = [
+        {
+            "source_id": idx,
+            "title": finding.get("title") or finding.get("url") or f"来源 {idx}",
+            "url": finding.get("url") or "",
+            "snippet": str(finding.get("snippet") or "")[:1000],
+        }
+        for idx, finding in enumerate(findings, start=1)
+    ]
+    base_prompt = (
+        "Write the analytical body of a Chinese research report in Markdown. "
+        "Use only the supplied evidence; do not invent facts or URLs. Synthesize the "
+        "evidence instead of listing or repeating source snippets. Clearly distinguish "
+        "reported facts, reasonable inferences, and unresolved uncertainties. Include "
+        "an executive summary, analysis organized around the objective's requested "
+        "dimensions, a 12-month outlook when relevant, key risks, and a concise "
+        "conclusion. Cite claims inline with the supplied source IDs in [^N] format. "
+        "Do not add a document title, research-objective section, or references section.\n"
+        f"Objective: {state.get('objective', '')}\n"
+        f"Selected plan: {json.dumps(state.get('plan') or {}, ensure_ascii=False)}\n"
+        f"Evidence: {json.dumps(evidence, ensure_ascii=False)}"
+    )
+    llm = _get_llm(ctx)
+    content = _llm_content(llm.invoke(base_prompt))
+    normalized = _normalize_report_analysis(content, len(evidence))
+    if normalized:
+        return normalized
+
+    retry_prompt = (
+        f"{base_prompt}\n\n"
+        "The previous draft did not satisfy the required citation format. Rewrite it now. "
+        "Every factual paragraph must contain at least one citation such as [^1], using "
+        f"only IDs 1 through {len(evidence)}. Use Markdown headings beginning with ##."
+    )
+    return _normalize_report_analysis(
+        _llm_content(llm.invoke(retry_prompt)),
+        len(evidence),
+    )
 
 
 def make_nodes(ctx: EngineContext):
@@ -282,34 +372,50 @@ def make_nodes(ctx: EngineContext):
             return {}
 
         user_message = _latest_user_message(state.get("messages", []))
-        try:
-            llm = _get_llm(ctx)
-            prompt = (
-                "Clarify the user's research objective.\n"
-                f"User message: {user_message}\n"
-                "If the objective is clear, respond with a line starting with OBJECTIVE: "
-                "followed by a concise research objective. Otherwise ask a follow-up question."
-            )
-            response_text = _llm_content(llm.invoke(prompt))
-            objective = _extract_objective(response_text, user_message)
-            if objective:
-                return {"objective": objective}
-            return {"messages": [{"role": "assistant", "content": response_text.strip()}]}
-        except Exception:
-            return {
-                "messages": [{"role": "assistant", "content": "请描述你想研究的方向。"}],
-            }
+        llm = _get_llm(ctx)
+        prompt = (
+            "Clarify the user's research objective.\n"
+            f"Conversation:\n{_conversation_context(state.get('messages', []))}\n"
+            "If the objective is clear, respond with a line starting with OBJECTIVE: "
+            "followed by a concise research objective. Otherwise ask a follow-up question."
+        )
+        response_text = _llm_content(llm.invoke(prompt))
+        objective = _extract_objective(response_text, user_message)
+        if objective:
+            return {"objective": objective, "clarification_question": None}
+        return {"clarification_question": response_text.strip()}
+
+    def await_clarification(state: ResearchState) -> dict:
+        question = str(state.get("clarification_question") or "请补充研究目标的具体范围。")
+        response = interrupt({"kind": "clarification", "message": question})
+        if not isinstance(response, dict) or response.get("kind") != "clarification":
+            raise ValueError("Expected a clarification response")
+        answer = str(response.get("answer") or "").strip()
+        if not answer:
+            raise ValueError("A non-empty clarification answer is required")
+        return {
+            "messages": [
+                {"role": "assistant", "content": question},
+                {"role": "user", "content": answer},
+            ],
+            "clarification_question": None,
+        }
 
     def generate_plan(state: ResearchState) -> dict:
         objective = state["objective"]
         plan = None
+        feedback = str(state.get("replan_feedback") or "").strip()
         try:
             llm = _get_llm(ctx)
             prompt = (
                 "Generate a research plan as JSON with keys summary (string) and options "
-                "(array of {id, label}).\n"
+                "(array of {id, label}). Options must be mutually exclusive alternative "
+                "approaches, and every option must cover the complete objective. Do not "
+                "represent report sections or sequential research steps as options.\n"
                 f"Research topic: {objective}"
             )
+            if feedback:
+                prompt += f"\nThe user requested a revision with this feedback: {feedback}"
             response_text = _llm_content(llm.invoke(prompt))
             plan = _parse_json_content(response_text)
             if isinstance(plan, dict) and "summary" in plan and "options" in plan:
@@ -318,7 +424,7 @@ def make_nodes(ctx: EngineContext):
                     state,
                     option_count=len(plan.get("options", [])),
                 )
-                return {"plan": plan}
+                return {"plan": plan, "replan_feedback": None}
         except Exception:
             pass
         plan = _fallback_plan(objective)
@@ -327,13 +433,32 @@ def make_nodes(ctx: EngineContext):
             state,
             option_count=len(plan.get("options", [])),
         )
-        return {"plan": plan}
+        return {"plan": plan, "replan_feedback": None}
 
     def await_plan_approval(state: ResearchState) -> dict:
-        decision = interrupt({"plan": state.get("plan"), "message": "请确认或选择方案"})
+        decision = interrupt({"kind": "plan_approval", "plan": state.get("plan"), "message": "请确认或选择方案"})
+        if not isinstance(decision, dict):
+            raise ValueError("Expected a plan decision")
+        if decision.get("kind") not in (None, "plan_approval"):
+            raise ValueError("Expected a plan approval response")
+        if not decision.get("approved"):
+            return {
+                "approved": False,
+                "replan_feedback": str(decision.get("feedback") or "").strip(),
+            }
+
+        chosen_option = decision.get("chosen_option")
+        option_ids = {
+            str(option.get("id"))
+            for option in (state.get("plan") or {}).get("options", [])
+            if isinstance(option, dict) and option.get("id") is not None
+        }
+        if not isinstance(chosen_option, str) or chosen_option not in option_ids:
+            raise ValueError("A valid plan option must be selected before approval")
         return {
-            "approved": bool(decision.get("approved")),
-            "plan": {**state.get("plan", {}), "chosen_option": decision.get("chosen_option")},
+            "approved": True,
+            "plan": {**state.get("plan", {}), "chosen_option": chosen_option},
+            "replan_feedback": None,
         }
 
     def derive_steps(state: ResearchState) -> dict:
@@ -367,6 +492,8 @@ def make_nodes(ctx: EngineContext):
         bound_llm = llm.bind_tools(tools) if hasattr(llm, "bind_tools") else llm
         prompt = (
             "Use the available tools to collect sources for this research task. "
+            "Use search-capable tools for discovery when available, do not invent URLs, "
+            "and satisfy any minimum source-count requirement stated in the objective. "
             f"Objective: {state.get('objective', '')}\n"
             f"Steps: {json.dumps(state.get('steps', []), ensure_ascii=False)}\n"
             f"Return at most {max_sources} useful sources."
@@ -400,6 +527,11 @@ def make_nodes(ctx: EngineContext):
                 )
 
         ctx.session.commit()
+        if not findings:
+            raise RuntimeError(
+                "No usable sources were collected. Configure a search-capable MCP server "
+                "or verify that the requested public sources are reachable."
+            )
         publish_progress(
             "research.sources_collected",
             state,
@@ -416,7 +548,11 @@ def make_nodes(ctx: EngineContext):
     def write_report(state: ResearchState) -> dict:
         from app.engine.persistence import persist_report, sync_plan_and_steps
 
-        report_md = _build_report_markdown(state)
+        try:
+            analysis_md = _synthesize_report(ctx, state)
+        except Exception:
+            analysis_md = None
+        report_md = _build_report_markdown(state, analysis_md=analysis_md)
         sync_plan_and_steps(ctx.session, state)
         report = persist_report(ctx.session, project_id=state["project_id"], content_md=report_md)
         publish_progress("research.report_ready", state, report_id=report.id)
@@ -424,6 +560,7 @@ def make_nodes(ctx: EngineContext):
 
     return {
         "clarify_intent": clarify_intent,
+        "await_clarification": await_clarification,
         "generate_plan": generate_plan,
         "await_plan_approval": await_plan_approval,
         "derive_steps": derive_steps,

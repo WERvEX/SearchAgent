@@ -25,6 +25,17 @@ describe("api client", () => {
     expect(result.title).toBe("Demo");
   });
 
+  it("deletes conversations without parsing an empty response body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.deleteConversation(3)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith("/api/conversations/3", { method: "DELETE" });
+  });
+
   it("raises the backend detail when a request fails", async () => {
     vi.stubGlobal(
       "fetch",
@@ -158,5 +169,31 @@ describe("api client", () => {
     expect(result.command).toBeNull();
     expect(result.args).toBeNull();
     expect(result.url).toBe("http://localhost:9000/mcp");
+  });
+
+  it("updates an MCP server with PUT", async () => {
+    const payload = {
+      name: "remote-tools",
+      transport: "http",
+      command: null,
+      args: null,
+      env: null,
+      url: "https://tools.example.com/mcp",
+      enabled: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 5, ...payload }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.updateMCPServer(5, payload);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/mcp/servers/5", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(result.enabled).toBe(false);
   });
 });

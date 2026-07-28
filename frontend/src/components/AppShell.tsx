@@ -22,7 +22,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
     }`;
 
   return (
-    <div className="app-shell min-h-screen bg-zinc-50 text-zinc-950">
+    <div className="app-shell min-h-screen bg-zinc-50 text-zinc-950 xl:h-screen xl:overflow-hidden">
       <header
         data-testid="app-shell-header"
         className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3 xl:h-14 xl:min-h-0 xl:flex-nowrap xl:py-0"
@@ -74,7 +74,7 @@ export function AppShell({ left, main, right, activePanel, onPanelChange }: AppS
       </header>
       <div
         data-testid="app-shell-layout"
-        className="grid flex-1 grid-cols-1 gap-4 p-4 xl:min-h-[calc(100vh-3.5rem)] xl:grid-cols-[280px_minmax(0,1fr)_340px] xl:gap-0 xl:p-0"
+        className="grid flex-1 grid-cols-1 gap-4 p-4 xl:h-[calc(100vh-3.5rem)] xl:min-h-0 xl:grid-cols-[280px_minmax(0,1fr)_340px] xl:gap-0 xl:p-0"
       >
         <aside
           data-testid="app-shell-history"

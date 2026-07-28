@@ -1,4 +1,12 @@
-export const KNOWN_CONVERSATION_STATUSES = ["idle", "running", "active", "completed", "failed"] as const;
+export const KNOWN_CONVERSATION_STATUSES = [
+  "idle",
+  "running",
+  "active",
+  "awaiting_clarification",
+  "awaiting_approval",
+  "completed",
+  "failed",
+] as const;
 export type KnownConversationStatus = (typeof KNOWN_CONVERSATION_STATUSES)[number];
 export type ConversationStatus = KnownConversationStatus | (string & {});
 
@@ -23,6 +31,8 @@ export type ConversationDetail = ConversationRead & {
     objective: string | null;
     status: string;
     created_at: string;
+    latest_report_id: number | null;
+    latest_report_version: number | null;
   }>;
 };
 
@@ -37,6 +47,7 @@ export type ResearchRunPhase =
   | "idle"
   | "starting"
   | "active"
+  | "awaiting_clarification"
   | "awaiting_approval"
   | "resuming"
   | "completed"
@@ -98,6 +109,7 @@ export type ReportRead = {
 export const RESEARCH_LIFECYCLE_EVENT_TYPES = [
   "research.started",
   "research.plan_ready",
+  "research.awaiting_clarification",
   "research.awaiting_approval",
   "research.resumed",
   "research.sources_collected",

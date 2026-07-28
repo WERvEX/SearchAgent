@@ -30,7 +30,8 @@ describe("ProgressStream", () => {
     );
 
     expect(screen.getByText("Plan ready")).toBeInTheDocument();
-    expect(screen.getByText(/"option_count": 2/)).toBeInTheDocument();
+    expect(screen.getByText("2 plan options prepared")).toBeInTheDocument();
+    expect(screen.queryByText(/thread-1/)).not.toBeInTheDocument();
   });
 
   it("falls back to a readable representation for unknown events", () => {

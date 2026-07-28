@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.llm import connectivity
-from app.schemas.settings import LLMProfileCreate, PreferenceValue
+from app.schemas.settings import LLMProfileCreate, LLMProfileUpdate, PreferenceValue
 from app.services import settings_service
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -29,6 +29,26 @@ def create_llm_profile(payload: LLMProfileCreate, session: Session = Depends(get
 @router.get("/llm-profiles")
 def list_llm_profiles(session: Session = Depends(get_db)):
     return settings_service.list_llm_profiles(session)
+
+
+@router.put("/llm-profiles/{profile_id}")
+def update_llm_profile(
+    profile_id: int, payload: LLMProfileUpdate, session: Session = Depends(get_db)
+):
+    profile = settings_service.update_llm_profile(
+        session,
+        profile_id=profile_id,
+        name=payload.name,
+        provider=payload.provider,
+        base_url=payload.base_url,
+        model=payload.model,
+        api_key=payload.api_key,
+        params=payload.params,
+        is_default=payload.is_default,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="LLM profile not found")
+    return next(p for p in settings_service.list_llm_profiles(session) if p["id"] == profile.id)
 
 
 @router.delete("/llm-profiles/{profile_id}", status_code=204)

@@ -7,11 +7,27 @@ function isResearchLifecycleEvent(event: ServerEvent): event is ResearchLifecycl
   return typeof event.event === "string" && event.event.startsWith("research.") && typeof event.data === "object" && event.data !== null;
 }
 
+function lifecycleDetail(event: ResearchLifecycleEvent, t: ReturnType<typeof useI18n>["t"]) {
+  if (typeof event.data.message === "string") {
+    return event.data.message;
+  }
+  if (typeof event.data.source_count === "number") {
+    return t("progress.sourcesCollected", { count: event.data.source_count });
+  }
+  if (typeof event.data.option_count === "number") {
+    return t("progress.optionsPrepared", { count: event.data.option_count });
+  }
+  if (typeof event.data.report_id === "number") {
+    return t("progress.reportPrepared");
+  }
+  return null;
+}
+
 export function ProgressStream({ status, events }: { status: string; events: ServerEvent[] }) {
   const { t } = useI18n();
 
   return (
-    <section className="flex h-full flex-col">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-zinc-200 p-4">
         <h2 className="text-sm font-semibold">{t("progress.title")}</h2>
         <span className="text-xs text-zinc-500">{translateEventStatus(t, status)}</span>
@@ -20,19 +36,22 @@ export function ProgressStream({ status, events }: { status: string; events: Ser
         {events.length === 0 ? (
           <p className="text-sm text-zinc-500">{t("progress.empty")}</p>
         ) : (
-          events.map((event, index) => (
-            <div key={`${event.id ?? "event"}-${index}`} className="mb-2 rounded-md border border-zinc-200 p-3 text-sm">
-              <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase text-zinc-500">
-                <Activity className="h-3.5 w-3.5" aria-hidden="true" />
-                {event.event ? translateLifecycleEvent(t, event.event) : t("progress.message")}
+          events.map((event, index) => {
+            const detail = isResearchLifecycleEvent(event) ? lifecycleDetail(event, t) : null;
+            return (
+              <div key={`${event.id ?? "event"}-${index}`} className="mb-2 rounded-md border border-zinc-200 p-3 text-sm">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase text-zinc-500">
+                  <Activity className="h-3.5 w-3.5" aria-hidden="true" />
+                  {event.event ? translateLifecycleEvent(t, event.event) : t("progress.message")}
+                </div>
+                {detail ? (
+                  <p className="mt-1 break-words text-sm text-zinc-700">{detail}</p>
+                ) : isResearchLifecycleEvent(event) ? null : (
+                  <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-zinc-700">{JSON.stringify(event.data, null, 2)}</pre>
+                )}
               </div>
-              {isResearchLifecycleEvent(event) && typeof event.data.message === "string" ? (
-                <p className="break-words text-sm text-zinc-700">{event.data.message}</p>
-              ) : (
-                <pre className="whitespace-pre-wrap break-words text-xs text-zinc-700">{JSON.stringify(event.data, null, 2)}</pre>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>

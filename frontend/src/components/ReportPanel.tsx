@@ -8,16 +8,21 @@ export function ReportPanel({
   markdownUrl,
   pdfUrl,
   onLoadReport,
+  embedded = false,
 }: {
   report: ReportRead | null;
   markdownUrl: string | null;
   pdfUrl: string | null;
   onLoadReport: () => void;
+  embedded?: boolean;
 }) {
   const { t } = useI18n();
 
   return (
-    <section className="border-t border-zinc-200 bg-white">
+    <section
+      data-testid="report-panel"
+      className={embedded ? "overflow-hidden rounded-md border border-zinc-200 bg-white" : "border-t border-zinc-200 bg-white"}
+    >
       <div className="flex items-center justify-between gap-3 border-b border-zinc-200 p-4">
         <h2 className="text-sm font-semibold">{t("report.title")}</h2>
         <div className="flex flex-wrap justify-end gap-2">

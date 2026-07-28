@@ -40,8 +40,8 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
   }, [chosen, defaultChoice, options]);
 
   return (
-    <section className="flex h-full flex-col bg-white">
-      <div className="border-b border-zinc-200 p-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden bg-white">
+      <div className="max-h-36 shrink-0 overflow-auto border-b border-zinc-200 p-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-zinc-950">{t("plan.confirmation")}</h2>
           <span className="text-xs text-zinc-500">
@@ -95,7 +95,7 @@ export function PlanPanel({ awaitingDecision, pending, plan, onApprove, onReplan
         </div>
       </div>
 
-      <div className="flex gap-2 border-t border-zinc-200 p-4">
+      <div className="shrink-0 flex gap-2 border-t border-zinc-200 bg-white p-4">
         <button
           type="button"
           className="nav-button-active"

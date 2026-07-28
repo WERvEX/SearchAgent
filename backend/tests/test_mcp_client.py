@@ -95,6 +95,7 @@ def test_ensure_default_bocha_server_creates_once(session):
 
     env = svc.get_mcp_server_env(session, server["id"])
     assert env == {"BOCHA_API_KEY": "sk-test-key"}
+    assert mcp_client.build_mcp_connections(session) == {}
 
 
 def test_ensure_default_bocha_server_does_not_overwrite_existing(session):

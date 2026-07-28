@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ResearchWorkspace } from "./ResearchWorkspace";
@@ -58,6 +58,22 @@ describe("ResearchWorkspace", () => {
     expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
   });
 
+  it("submits clarification answers while awaiting clarification", async () => {
+    const onClarify = vi.fn();
+    render(
+      <ResearchWorkspace
+        conversation={{ id: 4, title: "Search API evaluation", status: "idle", created_at: "", updated_at: "", messages: [], projects: [] }}
+        profileId={7}
+        runPhase="awaiting_clarification"
+        onStart={vi.fn()}
+        onClarify={onClarify}
+      />,
+    );
+    await userEvent.type(screen.getByLabelText("Additional research detail"), "Europe in 2025");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onClarify).toHaveBeenCalledWith("Europe in 2025");
+  });
+
   it("disables research start while a run is pending or active", () => {
     const conversation = {
       id: 4,
@@ -79,6 +95,7 @@ describe("ResearchWorkspace", () => {
     );
 
     expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Starting research");
 
     rerender(
       <ResearchWorkspace
@@ -90,6 +107,7 @@ describe("ResearchWorkspace", () => {
     );
 
     expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Research in progress");
   });
 
   it("re-enables research start after a completed run", () => {
@@ -112,5 +130,30 @@ describe("ResearchWorkspace", () => {
 
     expect(screen.getByText("Research completed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start/i })).toBeDisabled();
+  });
+
+  it("renders messages and final output in the same scroll timeline", () => {
+    render(
+      <ResearchWorkspace
+        conversation={{
+          id: 4,
+          title: "Search API evaluation",
+          status: "completed",
+          created_at: "",
+          updated_at: "",
+          messages: [{ id: 11, role: "user", content: "Compare API pricing", meta: null }],
+          projects: [],
+        }}
+        profileId={7}
+        runPhase="completed"
+        onStart={vi.fn()}
+        timelineContent={<div>Final research output</div>}
+      />,
+    );
+
+    const timeline = screen.getByTestId("research-timeline");
+    expect(within(timeline).getByText("Compare API pricing")).toBeInTheDocument();
+    expect(within(timeline).getByText("Final research output")).toBeInTheDocument();
+    expect(timeline).not.toContainElement(screen.getByLabelText("Research request"));
   });
 });

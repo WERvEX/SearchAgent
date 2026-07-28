@@ -37,3 +37,25 @@ def test_get_research_tools_includes_mcp_tools_and_surfaces_errors(session, monk
     names = [getattr(t, "name", None) for t in result["tools"]]
     assert "fetch_page" in names
     assert result["errors"] == [{"server": "x", "error": "boom"}]
+
+
+def test_get_research_tools_uses_saved_bocha_key_without_legacy_mcp_process(session, monkeypatch):
+    from app.services import settings_service as svc
+    from app.tools import registry
+
+    svc.create_mcp_server(
+        session,
+        name="bocha",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@humansean/mcp-bocha"],
+        env={"BOCHA_API_KEY": "sk-test"},
+    )
+
+    async def fake_load_mcp_tools(_session):
+        return ([], [])
+
+    monkeypatch.setattr(registry, "load_mcp_tools", fake_load_mcp_tools)
+    result = asyncio.run(registry.get_research_tools(session))
+
+    assert [tool.name for tool in result["tools"]] == ["fetch_page", "bocha_web_search"]

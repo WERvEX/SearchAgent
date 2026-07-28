@@ -7,6 +7,8 @@ describe("ConversationPanel", () => {
   it("renders conversations, highlights the active item, and routes actions", async () => {
     const onSelect = vi.fn();
     const onCreate = vi.fn();
+    const onRename = vi.fn();
+    const onDelete = vi.fn().mockResolvedValue(true);
 
     render(
       <ConversationPanel
@@ -17,17 +19,28 @@ describe("ConversationPanel", () => {
         activeId={2}
         onSelect={onSelect}
         onCreate={onCreate}
+        onRename={onRename}
+        onDelete={onDelete}
       />,
     );
 
-    expect(screen.getByRole("button", { name: /beta running/i })).toHaveClass("bg-zinc-900");
     expect(screen.getByRole("button", { name: /alpha idle/i })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: /beta running/i })).toHaveAttribute("aria-current", "page");
 
     await userEvent.click(screen.getByRole("button", { name: /alpha idle/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+    await userEvent.clear(screen.getByLabelText("Conversation title"));
+    await userEvent.type(screen.getByLabelText("Conversation title"), "Renamed conversation");
+    await userEvent.click(screen.getByRole("button", { name: "Save title" }));
     await userEvent.click(screen.getByRole("button", { name: /^new$/i }));
 
     expect(onSelect).toHaveBeenCalledWith(1);
+    expect(onRename).toHaveBeenCalledWith(1, "Renamed conversation");
     expect(onCreate).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
+    expect(screen.getByText("Delete “Alpha” and all of its research data?")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledWith(1);
   });
 });

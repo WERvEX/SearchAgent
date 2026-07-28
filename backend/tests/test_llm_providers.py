@@ -51,3 +51,15 @@ def test_resolve_init_kwargs_compatible_provider_resolved():
     )
     assert kwargs["model_provider"] == "openai"
     assert kwargs["base_url"] == "https://dashscope.example/v1"
+
+
+def test_resolve_init_kwargs_normalizes_mimo_endpoint_to_api_root():
+    from app.llm.providers import resolve_init_kwargs
+
+    kwargs = resolve_init_kwargs(
+        provider="openai_compatible",
+        model="mimo-v2.5-pro",
+        base_url="https://api.xiaomimimo.com/v1/responses",
+    )
+
+    assert kwargs["base_url"] == "https://api.xiaomimimo.com/v1"

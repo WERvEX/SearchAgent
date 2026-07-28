@@ -1,8 +1,20 @@
 import httpx
+import pytest
 
 
 def _client_with_handler(handler):
     return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch):
+    from app.tools import fetch
+
+    monkeypatch.setattr(
+        fetch.socket,
+        "getaddrinfo",
+        lambda host, port, *args, **kwargs: [(None, None, None, None, ("93.184.216.34", port))],
+    )
 
 
 def test_fetch_url_extracts_visible_text():
@@ -88,8 +100,15 @@ def test_fetch_url_closes_self_created_client(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def get(self, url):
-            return httpx.Response(200, text="<html><body>hi</body></html>")
+        def stream(self, method, url, **kwargs):
+            class _ResponseContext:
+                def __enter__(self):
+                    return httpx.Response(200, text="<html><body>hi</body></html>")
+
+                def __exit__(self, *args):
+                    return False
+
+            return _ResponseContext()
 
         def close(self):
             closed["value"] = True
@@ -126,3 +145,43 @@ def test_fetch_url_returns_error_when_response_too_large():
     result = fetch.fetch_url("https://example.com/huge", client=_client_with_handler(handler))
 
     assert result.startswith("Error fetching https://example.com/huge: response too large")
+
+
+def test_fetch_url_rejects_non_public_and_non_http_targets():
+    from app.tools import fetch
+
+    for url in ("file:///etc/passwd", "http://127.0.0.1", "http://localhost"):
+        result = fetch.fetch_url(url)
+        assert result.startswith(f"Error fetching {url}:")
+
+
+def test_fetch_url_revalidates_redirect_targets():
+    from app.tools import fetch
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://127.0.0.1/internal"})
+
+    result = fetch.fetch_url("https://example.com", client=_client_with_handler(handler))
+
+    assert result.startswith("Error fetching https://example.com: URL must resolve only to public addresses")
+
+
+def test_fetch_url_validates_fake_ip_dns_with_doh(monkeypatch):
+    from app.tools import fetch
+
+    monkeypatch.setattr(
+        fetch.socket,
+        "getaddrinfo",
+        lambda host, port, *args, **kwargs: [(None, None, None, None, ("198.18.1.25", port))],
+    )
+    monkeypatch.setattr(
+        fetch,
+        "_resolve_with_doh",
+        lambda hostname: {fetch.ipaddress.ip_address("93.184.216.34")},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><body>public page</body></html>")
+
+    result = fetch.fetch_url("https://example.com", client=_client_with_handler(handler))
+    assert result == "public page"

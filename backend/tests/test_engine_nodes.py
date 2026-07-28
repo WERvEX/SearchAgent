@@ -8,15 +8,16 @@ class _FakeLLM:
             pass
 
         r = _R()
-        if "clarify" in str(prompt).lower() or "objective" in str(prompt).lower():
-            r.content = "OBJECTIVE: 可再生能源趋势"
-        elif "plan" in str(prompt).lower():
+        prompt_text = str(prompt).lower()
+        if "derive research steps" in prompt_text:
+            r.content = '[{"seq": 1, "title": "搜索", "description": "d", "status": "pending"}]'
+        elif "generate a research plan" in prompt_text:
             r.content = (
                 '{"summary": "计划摘要", "options": [{"id": "A", "label": "全面"}, '
                 '{"id": "B", "label": "聚焦"}]}'
             )
-        elif "steps" in str(prompt).lower():
-            r.content = '[{"seq": 1, "title": "搜索", "description": "d", "status": "pending"}]'
+        elif "clarify" in prompt_text or "objective" in prompt_text:
+            r.content = "OBJECTIVE: 可再生能源趋势"
         else:
             r.content = "ok"
         return r
@@ -98,6 +99,67 @@ def test_derive_steps_parses_json(session):
     )
     assert out["steps"][0]["title"] == "搜索"
     assert out["steps"][0]["status"] == "pending"
+
+
+def test_clarify_propagates_llm_configuration_errors(session):
+    from app.engine.context import EngineContext
+    from app.engine.nodes import make_nodes
+
+    def missing_profile():
+        raise ValueError("LLM profile 999 not found")
+
+    nodes = make_nodes(EngineContext(session=session, profile_id=999, llm_factory=missing_profile))
+
+    with pytest.raises(ValueError, match="profile 999"):
+        nodes["clarify_intent"](
+            {
+                "conversation_id": 1,
+                "project_id": 1,
+                "messages": [{"role": "user", "content": "research a clear objective"}],
+                "objective": "",
+                "plan": None,
+                "approved": False,
+                "steps": [],
+                "findings": [],
+                "report_md": None,
+            }
+        )
+
+
+def test_invoke_tool_uses_async_interface_when_available():
+    from langchain_core.tools import StructuredTool
+
+    from app.engine.nodes import _invoke_tool
+
+    async def search(query: str):
+        return [{"url": "https://example.com", "snippet": query}]
+
+    tool = StructuredTool.from_function(
+        coroutine=search,
+        name="search",
+        description="Search for a source.",
+    )
+
+    assert _invoke_tool(tool, {"query": "renewable energy"}) == [
+        {"url": "https://example.com", "snippet": "renewable energy"}
+    ]
+
+
+def test_iter_source_items_keeps_fetched_page_text():
+    from app.engine.nodes import _iter_source_items
+
+    assert _iter_source_items(
+        "A useful page summary.",
+        tool_name="fetch_page",
+        args={"url": "https://example.com"},
+    ) == [
+        {
+            "title": "https://example.com",
+            "url": "https://example.com",
+            "snippet": "A useful page summary.",
+            "tool_name": "fetch_page",
+        }
+    ]
 
 
 def test_execute_research_calls_tools_respects_source_limit_and_persists_sources(
@@ -255,7 +317,8 @@ def test_execute_research_can_load_tools_inside_running_event_loop(session, monk
             }
         )
 
-    assert asyncio.run(run_node()) == {"findings": []}
+    with pytest.raises(RuntimeError, match="No usable sources"):
+        asyncio.run(run_node())
 
 
 def test_aggregate_evidence_deduplicates_findings_and_marks_criteria(session):
@@ -378,3 +441,69 @@ def test_write_report_generates_cited_markdown_persists_report_and_publishes_eve
     assert len(reports) == 1
     assert reports[0].project_id == project.id
     assert reports[0].content_md == out["report_md"]
+
+
+def test_write_report_uses_synthesized_analysis_instead_of_dumping_snippets(session, monkeypatch):
+    from app.db.models import Conversation, ResearchProject
+    from app.engine.context import EngineContext
+    from app.engine.nodes import make_nodes
+
+    class _ReportLLM:
+        def invoke(self, prompt):
+            class _R:
+                content = (
+                    "## 执行摘要\n\n自研芯片短期内更可能补充而非取代通用 GPU。[^1]\n\n"
+                    "## 成本与产能\n\n定制化有望改善特定负载成本，但量产爬坡仍是主要不确定性。[^1]\n\n"
+                    "## 风险与展望\n\n未来十二个月应重点观察良率、软件适配和部署规模。[^1]\n\n"
+                    "## 结论\n\n现有证据支持渐进替代判断，尚不足以支持全面替代。[^1]"
+                )
+
+            return _R()
+
+    conv = Conversation(title="c")
+    session.add(conv)
+    session.flush()
+    project = ResearchProject(conversation_id=conv.id, topic="chips", objective="分析芯片影响")
+    session.add(project)
+    session.commit()
+
+    nodes = make_nodes(EngineContext(session=session, profile_id=1, llm_factory=lambda: _ReportLLM()))
+    long_snippet = "不应原样出现在综合报告中的搜索摘要 " * 80
+    out = nodes["write_report"](
+        {
+            "conversation_id": conv.id,
+            "project_id": project.id,
+            "messages": [],
+            "objective": "分析芯片影响",
+            "plan": {"summary": "情景分析", "chosen_option": "A"},
+            "approved": True,
+            "steps": [],
+            "findings": [
+                {
+                    "title": "Source",
+                    "url": "https://example.com/source",
+                    "snippet": long_snippet,
+                    "tool_name": "search_web",
+                }
+            ],
+            "report_md": None,
+            "report_id": None,
+            "run_id": "run-synthesis",
+        }
+    )
+
+    assert "## 执行摘要" in out["report_md"]
+    assert "## 成本与产能" in out["report_md"]
+    assert long_snippet not in out["report_md"]
+    assert "[^1]: [Source](https://example.com/source)" in out["report_md"]
+
+
+def test_normalize_report_analysis_accepts_plain_numbered_citations():
+    from app.engine.nodes import _normalize_report_analysis
+
+    draft = "## 摘要\n\n" + ("这是基于来源的综合判断，而不是原始摘要的重复。" * 8) + "[1]"
+
+    normalized = _normalize_report_analysis(draft, source_count=2)
+
+    assert normalized is not None
+    assert "[^1]" in normalized

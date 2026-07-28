@@ -38,6 +38,36 @@ def create_llm_profile(
     return profile
 
 
+def update_llm_profile(
+    session: Session,
+    *,
+    profile_id: int,
+    name: str,
+    provider: str,
+    base_url: Optional[str],
+    model: str,
+    api_key: Optional[str],
+    params: Optional[dict] = None,
+    is_default: bool = False,
+) -> LLMProfile | None:
+    profile = session.get(LLMProfile, profile_id)
+    if profile is None:
+        return None
+    if is_default:
+        _clear_default_profiles(session)
+    profile.name = name
+    profile.provider = provider
+    profile.base_url = base_url
+    profile.model = model
+    profile.params_json = params
+    profile.is_default = is_default
+    if api_key:
+        profile.api_key_encrypted = encrypt(api_key)
+    session.commit()
+    session.refresh(profile)
+    return profile
+
+
 def _clear_default_profiles(session: Session) -> None:
     for p in session.scalars(
         select(LLMProfile).where(LLMProfile.is_default.is_(True))
@@ -105,6 +135,34 @@ def create_mcp_server(
         enabled=enabled,
     )
     session.add(server)
+    session.commit()
+    session.refresh(server)
+    return server
+
+
+def update_mcp_server(
+    session: Session,
+    *,
+    server_id: int,
+    name: str,
+    transport: str,
+    command: Optional[str] = None,
+    args: Optional[list] = None,
+    env: Optional[dict] = None,
+    url: Optional[str] = None,
+    enabled: bool = True,
+) -> MCPServer | None:
+    server = session.get(MCPServer, server_id)
+    if server is None:
+        return None
+    server.name = name
+    server.transport = transport
+    server.command = command
+    server.args_json = args
+    server.url = url
+    server.enabled = enabled
+    if env is not None:
+        server.env_json = {k: encrypt(str(v)) for k, v in env.items()} or None
     session.commit()
     session.refresh(server)
     return server

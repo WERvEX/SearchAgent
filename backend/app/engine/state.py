@@ -12,6 +12,8 @@ class ResearchState(TypedDict):
     objective: str
     plan: Optional[dict]
     approved: bool
+    replan_feedback: Optional[str]
+    clarification_question: Optional[str]
     steps: list[dict]
     findings: list[dict]
     report_md: Optional[str]

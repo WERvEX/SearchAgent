@@ -9,7 +9,7 @@ def test_create_list_and_get_conversation(app_home):
     created = client.post("/conversations", json={"title": "Renewable energy"}).json()
     assert created["id"] == 1
     assert created["title"] == "Renewable energy"
-    assert created["status"] == "active"
+    assert created["status"] == "idle"
 
     listed = client.get("/conversations").json()
     assert listed == [created]
@@ -18,6 +18,43 @@ def test_create_list_and_get_conversation(app_home):
     assert detail["id"] == 1
     assert detail["messages"] == []
     assert detail["projects"] == []
+
+    renamed = client.put("/conversations/1", json={"title": "Updated title"}).json()
+    assert renamed["title"] == "Updated title"
+    assert client.put("/conversations/1", json={"title": "   "}).status_code == 422
+
+    assert client.delete("/conversations/1").status_code == 204
+    assert client.get("/conversations/1").status_code == 404
+    assert client.get("/conversations").json() == []
+    assert client.delete("/conversations/1").status_code == 404
+
+
+def test_conversation_detail_includes_latest_report(app_home):
+    from app.db import session as db
+    from app.db.models import Report, ResearchProject
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    conversation = client.post("/conversations", json={"title": "Historical research"}).json()
+
+    with db.SessionLocal() as session:
+        project = ResearchProject(
+            conversation_id=conversation["id"],
+            topic="API pricing",
+            objective="Compare API pricing",
+            status="done",
+        )
+        session.add(project)
+        session.flush()
+        first_report = Report(project_id=project.id, version=1, content_md="# First")
+        latest_report = Report(project_id=project.id, version=2, content_md="# Latest")
+        session.add_all([first_report, latest_report])
+        session.commit()
+        latest_report_id = latest_report.id
+
+    detail = client.get(f"/conversations/{conversation['id']}").json()
+    assert detail["projects"][0]["latest_report_id"] == latest_report_id
+    assert detail["projects"][0]["latest_report_version"] == 2
 
 
 def test_research_start_and_resume_delegate_to_runner(app_home, monkeypatch):
@@ -45,12 +82,16 @@ def test_research_start_and_resume_delegate_to_runner(app_home, monkeypatch):
 
     client = TestClient(create_app())
     conv = client.post("/conversations", json={"title": "c"}).json()
+    profile = client.post(
+        "/settings/llm-profiles",
+        json={"name": "test-profile", "provider": "openai", "model": "gpt-test"},
+    ).json()
 
     started = client.post(
         "/research/start",
         json={
             "conversation_id": conv["id"],
-            "profile_id": 7,
+            "profile_id": profile["id"],
             "user_message": "研究可再生能源趋势",
         },
     ).json()
@@ -60,7 +101,57 @@ def test_research_start_and_resume_delegate_to_runner(app_home, monkeypatch):
 
     resumed = client.post(
         "/research/thread-1/resume",
-        json={"profile_id": 7, "decision": {"approved": True, "chosen_option": "A"}},
+        json={"profile_id": profile["id"], "decision": {"approved": True, "chosen_option": "A"}},
     ).json()
     assert resumed["interrupted"] is False
     assert resumed["state"]["report_md"] == "# R"
+
+
+def test_research_start_validates_payload_and_references(app_home, monkeypatch):
+    from app.engine import runner
+    from app.main import create_app
+
+    async def unexpected_start(*args, **kwargs):
+        raise AssertionError("runner should not run for an invalid request")
+
+    monkeypatch.setattr(runner, "start_research", unexpected_start)
+    client = TestClient(create_app())
+
+    assert client.post(
+        "/research/start",
+        json={"conversation_id": 1, "profile_id": 1, "user_message": "   "},
+    ).status_code == 422
+
+    missing_conversation = client.post(
+        "/research/start",
+        json={"conversation_id": 99, "profile_id": 1, "user_message": "research topic"},
+    )
+    assert missing_conversation.status_code == 404
+    assert missing_conversation.json()["detail"] == "Conversation not found"
+
+    conv = client.post("/conversations", json={"title": "c"}).json()
+    missing_profile = client.post(
+        "/research/start",
+        json={"conversation_id": conv["id"], "profile_id": 99, "user_message": "research topic"},
+    )
+    assert missing_profile.status_code == 404
+    assert missing_profile.json()["detail"] == "LLM profile not found"
+
+
+def test_research_resume_validates_clarification_and_active_endpoint(app_home, monkeypatch):
+    from app.engine import runner
+    from app.main import create_app
+
+    async def fake_active(session, *, conversation_id):
+        return {"thread_id": "thread-1", "state": {}, "interrupted": True, "interrupt_payload": {"kind": "clarification", "message": "Which region?"}}
+
+    monkeypatch.setattr(runner, "get_active_research", fake_active)
+    client = TestClient(create_app())
+    conv = client.post("/conversations", json={"title": "c"}).json()
+    assert client.post(
+        "/research/thread-1/resume",
+        json={"decision": {"kind": "clarification", "answer": "   "}},
+    ).status_code == 422
+    active = client.get(f"/research/active/{conv['id']}")
+    assert active.status_code == 200
+    assert active.json()["interrupt_payload"]["kind"] == "clarification"

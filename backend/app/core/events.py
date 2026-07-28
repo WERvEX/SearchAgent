@@ -12,6 +12,7 @@ class EventBus:
     def __init__(self, *, history_size: int = 100) -> None:
         self._subscribers: set[queue.Queue[dict[str, Any]]] = set()
         self._history: deque[dict[str, Any]] = deque(maxlen=history_size)
+        self._subscriber_queue_size = max(1, history_size)
         self._next_event_id = 1
         self._lock = threading.Lock()
 
@@ -31,8 +32,27 @@ class EventBus:
             self._history.append(published)
             subscribers = list(self._subscribers)
         for subscriber in subscribers:
-            subscriber.put(published)
+            self._offer(subscriber, published)
         return published
+
+    @staticmethod
+    def _offer(subscriber: queue.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+        """Enqueue without allowing a slow client to block or grow memory."""
+        try:
+            subscriber.put_nowait(event)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            subscriber.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            subscriber.put_nowait(event)
+        except queue.Full:
+            # A consumer won the race after the queue was observed as full.
+            pass
 
     def subscribe(
         self,
@@ -43,7 +63,9 @@ class EventBus:
         stop_event: threading.Event | None = None,
         poll_interval: float = 0.1,
     ) -> Iterator[dict[str, Any]]:
-        subscriber: queue.Queue[dict[str, Any]] = queue.Queue()
+        subscriber: queue.Queue[dict[str, Any]] = queue.Queue(
+            maxsize=self._subscriber_queue_size
+        )
         with self._lock:
             history = [
                 event
@@ -52,7 +74,8 @@ class EventBus:
                 and (event_filter is None or event_filter(event))
             ]
             if replay_limit is not None:
-                history = history[-max(0, replay_limit):]
+                limit = max(0, replay_limit)
+                history = history[-limit:] if limit else []
             self._subscribers.add(subscriber)
         try:
             yield from history
