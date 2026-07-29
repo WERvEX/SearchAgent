@@ -1,6 +1,7 @@
 # Codex and local implementation scratch files
 .agents/
 .codex/
+.codex-staging/
 .worktrees/
 .superpowers/
 .review-tmp/
@@ -11,19 +12,26 @@ docs/superpowers/
 .env
 .env.*
 !.env.example
+.envrc
 .venv/
 venv/
 .idea/
 .vscode/
 *.local
 *.log
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # Python build, runtime, and test outputs (source tests remain tracked)
 __pycache__/
 *.py[cod]
 *.egg-info/
+.eggs/
+pip-wheel-metadata/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -48,9 +56,10 @@ frontend/node_modules/
 frontend/dist/
 frontend/coverage/
 frontend/.vite/
+frontend/.vitest/
 frontend/.npm-cache/
 frontend/.eslintcache
-frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
 frontend/.runtime-check-*/
 test-results/
 playwright-report/
@@ -63,3 +72,7 @@ pnpm-debug.log*
 # Local SearchAgent runtime data
 .searchagent/
 backend/.searchagent/
+searchagent.db
+searchagent.db-*
+secret.key
+reports/

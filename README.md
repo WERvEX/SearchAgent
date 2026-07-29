@@ -1,23 +1,39 @@
 # SearchAgent
 
-SearchAgent 是一个本地优先的 AI 搜索与研究工作台。它通过对话整理研究目标，先生成可确认的研究计划，再使用 LangGraph、LLM 与可插拔 MCP 工具执行检索、汇总证据，并生成带来源的 Markdown/PDF 报告。
+SearchAgent 是一个本地优先的 AI 深度研究工作台。它用类似 Codex Plan Mode 的对话流程澄清需求、形成可执行计划，再调用 LLM 与搜索工具收集证据，最终生成带引用的结构化报告。
 
-界面支持中文和英文，首次访问时默认跟随浏览器语言，手动切换后会在本机保存偏好。
+界面支持中文和英文，并让模型回复跟随当前界面语言。会话、计划、执行进度和报告都保存在本地，刷新页面或重启应用后可以继续。
 
-> 当前项目处于 MVP 阶段，适合本地开发与验证。运行研究前需要在设置页配置可用的 LLM Profile；联网检索能力取决于所配置的 MCP 服务或工具。
+> 项目目前面向本地单用户开发与验证。开始研究前，必须配置至少一个可用的模型 API；联网检索还需要配置 Bocha 或其他 MCP 搜索服务。
 
-## 已实现功能
+## 工作流程
 
-- 对话式创建研究任务与查看历史会话
-- 研究计划生成、人工确认及继续执行
-- 基于 LangGraph 的可中断、可恢复研究流程
-- SSE 实时展示研究状态、来源收集和报告生成进度
-- OpenAI、Anthropic 及 OpenAI-compatible LLM 配置
-- stdio、SSE、HTTP/streamable HTTP MCP 服务接入
-- MCP 不可用时保留内置网页抓取工具作为降级能力
-- LLM API Key 和 MCP 环境变量在本地加密存储
-- Markdown 报告预览，以及 Markdown/PDF 下载
-- 中英文界面、浏览器语言检测与语言偏好持久化
+```text
+规划对话 → 澄清问答 → 最终计划 → 执行研究 → 实时进度 → 最终报告
+                                                        ↓
+                                             修改报告或重新规划
+```
+
+1. 在聊天中描述研究目标；信息不足时，助手会给出最多三个单选问题，也可以自行输入答案。
+2. 信息充分后，时间线中出现版本化计划卡片。继续聊天会生成新版本，只有最新计划可以执行。
+3. 点击“执行计划”后，输入框暂时锁定；关键进度显示在时间线，步骤、来源和日志可在详情抽屉中查看。
+4. 完成后可分章节阅读报告、跳转引用来源，并下载 Markdown 或 PDF。
+5. 对报告继续提问时，系统会判断是修改现有报告，还是开启新一轮规划，并允许纠正判断。
+
+## 主要功能
+
+- 单滚动聊天时间线，集中展示规划消息、问答、计划、执行状态和历次报告
+- 首次访问自动创建会话；支持历史恢复、重命名和删除
+- 结构化澄清卡片，支持预设选项和用户自定义答案
+- 可中断、可恢复的 LangGraph 研究流程和版本化执行计划
+- 基于 SSE 的实时阶段、步骤、来源和异常进度
+- 折叠式报告结构、可点击引用、来源定位及报告版本切换
+- Markdown 下载，以及带生成状态、失败提示和重试的 PDF 导出
+- OpenAI-compatible 与 Anthropic 两种模型兼容格式
+- OpenAI、Anthropic、DeepSeek、Xiaomi MiMo、Alibaba Qwen 和自定义服务预设
+- 本地 stdio 与远程 HTTP MCP 服务配置、测试和编辑
+- API Key 与 MCP 环境变量本地加密存储
+- 中英文界面、浏览器语言检测和语言偏好持久化
 
 ## 技术栈
 
@@ -26,18 +42,18 @@ SearchAgent 是一个本地优先的 AI 搜索与研究工作台。它通过对�
 | 前端 | React 18、TypeScript、Vite、Tailwind CSS、Vitest |
 | API | FastAPI、Pydantic、SQLAlchemy、SSE |
 | Agent | LangChain、LangGraph、langchain-mcp-adapters |
-| 存储 | SQLite、本地文件系统、加密密钥文件 |
+| 存储 | SQLite、LangGraph SQLite checkpoint、本地文件系统 |
 | 导出 | markdown-it-py、Playwright/Chromium |
 
-## 环境要求
+## 快速开始
+
+### 环境要求
 
 - Python 3.11+
 - Node.js 18+ 和 npm
-- PDF 导出需要 Playwright Chromium
 - 至少一个可访问的 LLM API
-- 可选：Bocha 或其他 MCP 搜索服务
-
-## 本地启动
+- PDF 导出推荐安装 Playwright Chromium
+- 联网研究推荐准备 Bocha API Key 或其他搜索 MCP 服务
 
 ### 1. 启动后端
 
@@ -51,7 +67,10 @@ python -m playwright install chromium
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-后端健康检查地址为 <http://127.0.0.1:8000/health>，交互式 API 文档位于 <http://127.0.0.1:8000/docs>。
+可用地址：
+
+- 健康检查：<http://127.0.0.1:8000/health>
+- API 文档：<http://127.0.0.1:8000/docs>
 
 ### 2. 启动前端
 
@@ -63,47 +82,65 @@ npm install
 npm run dev
 ```
 
-打开 <http://127.0.0.1:5173>。Vite 会把 `/api` 和 `/events` 请求代理到本地后端。
+访问 <http://127.0.0.1:5173>。开发服务器会把 `/api` 和 `/events` 代理到 `127.0.0.1:8000`。
 
-## 首次使用
+## 首次配置
 
-1. 打开右上角设置页，新建一个 LLM Profile。
-2. 填写 provider、model、API Key；使用自定义兼容接口时同时填写 base URL。
-3. 保存后执行连接测试，并将可用 Profile 设为当前配置。
-4. 如需联网检索，在 MCP Servers 中配置 Bocha 或其他 MCP 服务。
-5. 返回研究工作区，创建会话、输入研究问题，确认计划后开始执行。
+### 模型 API
 
-LLM Profile 支持 `openai`、`anthropic` 和 `openai_compatible` 等 LangChain provider。MCP 服务可使用 `stdio`、`sse`、`http` 或 `streamable_http` 传输方式。
+打开“设置 → 模型 API”，选择提供商预设和兼容格式，再填写模型名称与 API Key。
+
+- OpenAI-compatible：适用于 OpenAI、DeepSeek、MiMo、Qwen 兼容接口及大多数第三方服务。
+- Anthropic：适用于 Anthropic Messages API，或明确提供 Anthropic 兼容接口的服务。
+- Custom：手动填写 Base URL；应填写 API 根地址，不要填完整的 `/chat/completions` 请求地址。
+
+保存后先点击连接测试，再将该配置设为当前模型。模型、地址或密钥发生变化时，可直接编辑已有配置。
+
+### Bocha 搜索
+
+在“设置 → MCP 服务”中新建以下本地服务：
+
+| 字段 | 值 |
+| --- | --- |
+| 名称 | `bocha` |
+| 类型 | 本地命令（stdio） |
+| 命令 | `npx` |
+| 参数 | `-y` 和 `@humansean/mcp-bocha`，每行一个 |
+| 环境变量 | `BOCHA_API_KEY=你的密钥` |
+
+SearchAgent 会识别名为 `bocha` 的配置，并使用保存的密钥调用内置 Bocha 搜索适配器。其他工具可以按其文档配置为 stdio 命令或远程 HTTP MCP 服务。
+
+不配置搜索服务时，系统仍可抓取模型已经知道的网页地址，但无法可靠完成开放式网络搜索。
 
 ## 本地数据与安全
 
-默认数据目录为 `~/.searchagent/`：
+默认数据目录为用户主目录下的 `.searchagent`：
 
 ```text
 ~/.searchagent/
-├── searchagent.db   # 会话、配置与报告元数据
-├── secret.key       # 本地字段加密密钥
-└── reports/         # 导出的 Markdown/PDF 报告
+├── searchagent.db   # 会话、消息、计划、配置和报告元数据
+├── secret.key       # API Key 与 MCP 环境变量的本地加密密钥
+└── reports/         # 生成的报告导出文件
 ```
 
-可通过 `SEARCHAGENT_HOME` 环境变量更改数据目录。例如：
+可以用 `SEARCHAGENT_HOME` 指定其他目录：
 
 ```powershell
 $env:SEARCHAGENT_HOME = "C:\data\searchagent"
 ```
 
-不要提交 API Key、`secret.key`、数据库或导出报告。项目的 `.gitignore` 已排除仓库内的 `.searchagent/`、环境变量文件、依赖、构建产物、测试输出和本地开发文件。
+请备份数据库时一并备份 `secret.key`，否则已加密的密钥无法恢复。不要提交数据库、密钥、环境变量文件或导出报告；仓库的 `.gitignore` 已覆盖这些本地产物。
 
-## 测试与构建
+## 常用命令
 
-后端：
+后端测试：
 
 ```powershell
 cd backend
 python -m pytest
 ```
 
-前端：
+前端测试与生产构建：
 
 ```powershell
 cd frontend
@@ -117,26 +154,52 @@ npm run build
 SearchAgent/
 ├── backend/
 │   ├── app/
-│   │   ├── api/       # FastAPI 路由与 SSE
-│   │   ├── core/      # 路径、事件和加密
-│   │   ├── db/        # SQLite 模型与会话
-│   │   ├── engine/    # LangGraph 状态、节点和运行器
-│   │   ├── llm/       # LLM provider 与模型工厂
-│   │   ├── services/  # 设置和报告导出
-│   │   └── tools/     # MCP 客户端与网页抓取
+│   │   ├── api/       # REST、SSE、研究恢复和报告接口
+│   │   ├── core/      # 路径、事件与加密
+│   │   ├── db/        # SQLite 模型和数据库会话
+│   │   ├── engine/    # LangGraph 状态、节点与运行器
+│   │   ├── llm/       # 模型提供商适配
+│   │   ├── services/  # 设置、研究和报告导出服务
+│   │   └── tools/     # Bocha、MCP 与网页抓取工具
 │   └── tests/
-└── frontend/
-    └── src/
-        ├── api/        # REST/SSE 客户端
-        ├── components/ # 研究、计划、报告和设置界面
-        └── i18n/       # 中英文资源与语言状态
+├── frontend/
+│   └── src/
+│       ├── api/        # REST/SSE 客户端和类型
+│       ├── components/ # 时间线、问答、计划、报告与设置 UI
+│       └── i18n/       # 中英文文案和语言状态
+└── docs/               # 项目补充文档
 ```
+
+## 常见问题
+
+### 模型连接测试失败
+
+确认兼容格式、Base URL、模型名称和 API Key 属于同一服务。OpenAI-compatible 地址通常以 `/v1` 或服务商给出的兼容模式根路径结尾，不要追加 `/chat/completions`。
+
+### 研究没有搜索结果
+
+检查搜索 MCP 是否已启用、环境变量名称是否正确，并查看执行详情中的工具错误。Bocha 配置的名称必须是 `bocha`，密钥字段必须是 `BOCHA_API_KEY`。
+
+### PDF 无法生成
+
+先在后端虚拟环境中执行：
+
+```powershell
+python -m playwright install chromium
+```
+
+后端会尝试 Playwright Chromium，并在 Windows 上回退到本机 Chrome 或 Edge。若仍失败，报告卡片会显示后端返回的具体原因；Markdown 下载不受影响。
+
+### 刷新后进度没有立即更新
+
+页面会先从 SQLite 恢复任务状态，再通过 SSE 接收后续事件。确认后端仍在运行，并检查浏览器到 `/events` 的连接是否正常。
 
 ## 当前限制
 
-- 仅面向单用户、本地运行，不包含账号、权限和云端部署能力。
-- 研究质量与可用工具取决于 LLM 及 MCP 服务配置。
-- PDF 导出依赖本机安装的 Playwright Chromium。
+- 仅面向本地单用户使用，不包含账号、权限和云端部署能力。
+- 研究质量取决于所选模型、搜索工具和来源质量。
+- 执行期间暂不支持暂停、插入指令或修改计划。
+- PDF 排版依赖本机可用的 Chromium/Chrome/Edge 与中文字体。
 
 ## 许可证
 
