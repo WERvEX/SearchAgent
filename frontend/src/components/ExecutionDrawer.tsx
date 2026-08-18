@@ -46,6 +46,8 @@ export function ExecutionDrawer({
         </div>
       </div>
       <div className="min-h-0">
+        {detail?.agent_tasks?.length ? <div className="border-b border-zinc-200 p-4"><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Agent 任务</h3><div className="mt-2 space-y-2">{detail.agent_tasks.map((task) => <div key={task.id} className="flex justify-between gap-2 text-sm"><span>{task.role} · {task.title}</span><span className="text-xs text-zinc-500">{task.status}</span></div>)}</div></div> : null}
+        {detail?.tool_calls?.length ? <div className="border-b border-zinc-200 p-4"><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">工具调用</h3><div className="mt-2 space-y-2">{detail.tool_calls.map((call) => <div key={call.id} className="text-sm"><div className="flex justify-between gap-2"><span>{call.agent_role} · {call.tool_name}</span><span className="text-xs text-zinc-500">{call.status}</span></div>{call.error ? <p className="mt-1 text-xs text-red-600">{call.error}</p> : null}</div>)}</div></div> : null}
         <ProgressStream status={streamStatus} events={events} />
       </div>
     </div>

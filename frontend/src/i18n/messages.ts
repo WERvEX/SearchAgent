@@ -252,6 +252,8 @@ export const enMessages = {
   "event.research.step_completed": "Step completed",
   "event.research.tool_started": "Tool started",
   "event.research.tool_completed": "Tool completed",
+  "event.research.tool_denied": "Tool denied",
+  "event.research.tool_approval_required": "Tool approval required",
   "event.research.source_collected": "Source collected",
   "event.research.report_revision_started": "Report revision started",
   "event.research.report_revised": "Report revised",
@@ -293,7 +295,7 @@ export const zhCNMessages: Record<MessageKey, string> = {
   "status.planning": "规划中", "status.awaiting_execution": "待执行", "status.executing": "执行中", "status.revising_report": "修改报告中",
   "role.user": "用户", "role.assistant": "助手", "role.system": "系统", "role.tool": "工具",
   "event.connecting": "正在连接", "event.open": "已连接", "event.closed": "已关闭", "event.error": "连接错误", "event.unavailable": "不可用", "event.research.started": "研究已启动", "event.research.plan_ready": "计划已就绪", "event.research.awaiting_clarification": "等待补充信息", "event.research.awaiting_approval": "等待确认", "event.research.resumed": "研究已恢复", "event.research.sources_collected": "已收集来源", "event.research.report_ready": "报告已就绪", "event.research.completed": "研究已完成", "event.research.failed": "研究失败",
-  "event.research.planning_message": "规划回复", "event.research.execution_started": "开始执行", "event.research.step_started": "步骤开始", "event.research.step_completed": "步骤完成", "event.research.tool_started": "工具调用开始", "event.research.tool_completed": "工具调用完成", "event.research.source_collected": "已收集来源", "event.research.report_revision_started": "开始修改报告", "event.research.report_revised": "报告已更新",
+  "event.research.planning_message": "规划回复", "event.research.execution_started": "开始执行", "event.research.step_started": "步骤开始", "event.research.step_completed": "步骤完成", "event.research.tool_started": "工具调用开始", "event.research.tool_completed": "工具调用完成", "event.research.tool_denied": "工具调用被拒绝", "event.research.tool_approval_required": "等待工具授权", "event.research.source_collected": "已收集来源", "event.research.report_revision_started": "开始修改报告", "event.research.report_revised": "报告已更新",
   "settings.editProfile": "编辑配置",
   "settings.cancelEdit": "取消编辑",
   "app.failedToRenameConversation": "重命名对话失败。",
@@ -332,7 +334,7 @@ const knownRoles = {
 } satisfies Record<KnownMessageRole, MessageKey>;
 const knownEventStatuses = { connecting: "event.connecting", open: "event.open", closed: "event.closed", error: "event.error", unavailable: "event.unavailable" } satisfies Record<EventStreamStatus, MessageKey>;
 const knownLifecycleEvents = {
-  "research.started": "event.research.started", "research.plan_ready": "event.research.plan_ready", "research.planning_message": "event.research.planning_message", "research.execution_started": "event.research.execution_started", "research.step_started": "event.research.step_started", "research.step_completed": "event.research.step_completed", "research.tool_started": "event.research.tool_started", "research.tool_completed": "event.research.tool_completed", "research.source_collected": "event.research.source_collected", "research.report_revision_started": "event.research.report_revision_started", "research.report_revised": "event.research.report_revised", "research.awaiting_clarification": "event.research.awaiting_clarification", "research.awaiting_approval": "event.research.awaiting_approval", "research.resumed": "event.research.resumed", "research.sources_collected": "event.research.sources_collected", "research.report_ready": "event.research.report_ready", "research.completed": "event.research.completed", "research.failed": "event.research.failed",
+  "research.started": "event.research.started", "research.plan_ready": "event.research.plan_ready", "research.planning_message": "event.research.planning_message", "research.execution_started": "event.research.execution_started", "research.step_started": "event.research.step_started", "research.step_completed": "event.research.step_completed", "research.tool_started": "event.research.tool_started", "research.tool_completed": "event.research.tool_completed", "research.tool_denied": "event.research.tool_denied", "research.tool_approval_required": "event.research.tool_approval_required", "research.source_collected": "event.research.source_collected", "research.report_revision_started": "event.research.report_revision_started", "research.report_revised": "event.research.report_revised", "research.awaiting_clarification": "event.research.awaiting_clarification", "research.awaiting_approval": "event.research.awaiting_approval", "research.resumed": "event.research.resumed", "research.sources_collected": "event.research.sources_collected", "research.report_ready": "event.research.report_ready", "research.completed": "event.research.completed", "research.failed": "event.research.failed",
 } satisfies Record<ResearchLifecycleEventType, MessageKey>;
 
 function translateKnown<K extends string>(t: Translate, values: Record<K, MessageKey>, value: string) {

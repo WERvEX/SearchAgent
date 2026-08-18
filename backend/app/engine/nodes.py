@@ -3,16 +3,20 @@ import re
 import asyncio
 import inspect
 import threading
+import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langgraph.types import interrupt
 
 from app.core.events import get_event_bus
-from app.db.models import Source, Step
+from app.db.models import AgentTask, ResearchProject, Source, Step, TraceRun
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
 from app.services.settings_service import get_preference
 from app.services.report_markdown import normalize_report_markdown
+from app.services.tracing_service import finish_span, start_span
+from app.tools.gateway import execute_tool
 
 
 def _get_llm(ctx: EngineContext) -> Any:
@@ -315,7 +319,7 @@ def _report_references(findings: list[dict], *, chinese: bool = True) -> list[st
 
 
 def _build_report_markdown(state: ResearchState, analysis_md: str | None = None) -> str:
-    findings = state.get("findings", [])
+    findings = state.get("verified_findings") or state.get("findings", [])
     chinese = _is_chinese(state)
     lines = [
         "# 研究报告" if chinese else "# Research Report",
@@ -365,7 +369,7 @@ def _normalize_report_analysis(content: str, source_count: int) -> str | None:
 
 
 def _synthesize_report(ctx: EngineContext, state: ResearchState) -> str | None:
-    findings = state.get("findings", [])
+    findings = state.get("verified_findings") or state.get("findings", [])
     evidence = [
         {
             "source_id": idx,
@@ -427,6 +431,13 @@ def make_nodes(ctx: EngineContext):
     def plan_conversation(state: ResearchState) -> dict:
         from app.engine.persistence import persist_plan_version
 
+        planner_task = None
+        trace_id = state.get("trace_id")
+        if isinstance(trace_id, str) and isinstance(state.get("project_id"), int) and ctx.session.get(ResearchProject, state["project_id"]) is not None and ctx.session.get(TraceRun, trace_id) is not None:
+            planner_task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="planner", title="Clarify objective and build plan", status="running", input_json={"message": _latest_user_message(state.get("messages", []))})
+            ctx.session.add(planner_task)
+            ctx.session.commit()
+
         latest_user = _latest_user_message(state.get("messages", []))
         current_objective = str(state.get("objective") or "").strip()
         previous_plan = state.get("plan") or {}
@@ -474,6 +485,11 @@ def make_nodes(ctx: EngineContext):
             objective = str(parsed.get("objective") or current_objective).strip()
             questions = _normalize_planning_questions(parsed.get("questions"))
             publish_progress("research.planning_message", state, message=message)
+            if planner_task is not None:
+                planner_task.status = "completed"
+                planner_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+                planner_task.output_json = {"ready": False, "question_count": len(questions)}
+                ctx.session.commit()
             return {
                 "objective": objective,
                 "planner_message": message,
@@ -495,6 +511,11 @@ def make_nodes(ctx: EngineContext):
                 else "Please clarify the objective, scope, time horizon, or expected output."
             )
             publish_progress("research.planning_message", state, message=message)
+            if planner_task is not None:
+                planner_task.status = "completed"
+                planner_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+                planner_task.output_json = {"ready": False, "question_count": 0}
+                ctx.session.commit()
             return {
                 "planner_message": message,
                 "planner_questions": [],
@@ -539,6 +560,11 @@ def make_nodes(ctx: EngineContext):
             plan_version=version,
             step_count=len(plan["steps"]),
         )
+        if planner_task is not None:
+            planner_task.status = "completed"
+            planner_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+            planner_task.output_json = {"ready": True, "step_count": len(plan["steps"]), "plan_version": version}
+            ctx.session.commit()
         return {
             "objective": objective,
             "plan": plan,
@@ -680,6 +706,18 @@ def make_nodes(ctx: EngineContext):
                 step_title=steps[0].get("title"),
             )
         max_sources = _get_max_sources(ctx)
+        trace_id = state.get("trace_id")
+        agent_tasks: list[dict] = []
+        if not isinstance(trace_id, str) or ctx.session.get(TraceRun, trace_id) is None:
+            trace_id = None
+        if trace_id:
+            for index, step in enumerate(steps[:3], start=1):
+                task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="retriever", title=str(step.get("title") or f"Retrieval task {index}"), status="running", input_json={"step": step})
+                ctx.session.add(task)
+                ctx.session.flush()
+                agent_tasks.append({"id": task.id, "role": task.role, "title": task.title, "status": task.status})
+            ctx.session.commit()
+        coordinator_span = start_span(ctx.session, trace_id, "agent:coordinator", kind="agent", attributes={"role": "coordinator", "parallel_limit": 3}, input_value=state.get("objective")) if trace_id else None
         tool_result = _run_async(registry.get_research_tools(ctx.session))
         tools = tool_result.get("tools", [])
         tools_by_name = {_tool_name(tool): tool for tool in tools}
@@ -697,22 +735,38 @@ def make_nodes(ctx: EngineContext):
         response = bound_llm.invoke(prompt)
 
         findings = list(state.get("findings", []))
-        for call in _response_tool_calls(response):
-            if len(findings) >= max_sources:
-                break
-
+        tool_calls = []
+        for call in _response_tool_calls(response)[:3]:
             name = _tool_call_name(call)
             tool = tools_by_name.get(name)
-            if tool is None:
-                continue
+            if tool is not None:
+                tool_calls.append((name, tool, _tool_call_args(call)))
 
-            args = _tool_call_args(call)
-            publish_progress(
-                "research.tool_started",
-                state,
-                tool_name=name,
+        parallel_results = None
+        if trace_id and len(tool_calls) > 1:
+            # Interrupts stay on the graph thread; once every call is allowed, actual I/O runs in up to three workers.
+            from app.db import session as db_session
+            from app.tools.policy import decide
+            for name, tool, args in tool_calls:
+                decision = decide(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args)
+                if decision.action != "allow":
+                    execute_tool(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details))
+            def _parallel_call(item):
+                name, tool, args = item
+                with db_session.SessionLocal() as worker_session:
+                    return execute_tool(worker_session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details))
+            with ThreadPoolExecutor(max_workers=min(3, len(tool_calls))) as executor:
+                parallel_results = list(executor.map(_parallel_call, tool_calls))
+
+        for index, (name, tool, args) in enumerate(tool_calls):
+            if len(findings) >= max_sources:
+                break
+            task_id = agent_tasks[0]["id"] if agent_tasks else None
+            publish_progress("research.tool_started", state, tool_name=name, agent_role="retriever")
+            result = parallel_results[index] if parallel_results is not None else (
+                execute_tool(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details))
+                if trace_id else _invoke_tool(tool, args)
             )
-            result = _invoke_tool(tool, args)
             collected_before = len(findings)
             for source in _iter_source_items(result, tool_name=name, args=args):
                 if len(findings) >= max_sources:
@@ -740,11 +794,14 @@ def make_nodes(ctx: EngineContext):
                 "research.tool_completed",
                 state,
                 tool_name=name,
+                agent_role="retriever",
                 source_count=len(findings) - collected_before,
             )
 
         ctx.session.commit()
         if not findings:
+            if coordinator_span:
+                finish_span(ctx.session, coordinator_span, status="error", error="No usable sources")
             raise RuntimeError(
                 "No usable sources were collected. Configure a search-capable MCP server "
                 "or verify that the requested public sources are reachable."
@@ -773,15 +830,37 @@ def make_nodes(ctx: EngineContext):
                 step_seq=step.get("seq"),
                 step_title=step.get("title"),
             )
+        for task in ctx.session.query(AgentTask).filter(AgentTask.project_id == state["project_id"], AgentTask.trace_id == trace_id).all():
+            task.status = "completed"
+            task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+            task.output_json = {"source_count": len(findings)}
+        ctx.session.commit()
+        if coordinator_span:
+            finish_span(ctx.session, coordinator_span, output_value={"source_count": len(findings)})
         return {"findings": findings, "steps": steps}
 
     def aggregate_evidence(state: ResearchState) -> dict:
         findings = _dedupe_findings(state.get("findings", []))
-        steps = _mark_acceptance_criteria(state.get("steps", []), findings)
-        return {"findings": findings, "steps": steps}
+        trace_id = state.get("trace_id")
+        verifier_span = start_span(ctx.session, trace_id, "agent:verifier", kind="agent", attributes={"role": "verifier"}, input_value={"finding_count": len(findings)}) if isinstance(trace_id, str) and ctx.session.get(TraceRun, trace_id) is not None else None
+        verified = []
+        for finding in findings:
+            if finding.get("url"):
+                verified.append({**finding, "verified": True})
+        steps = _mark_acceptance_criteria(state.get("steps", []), verified)
+        if verifier_span:
+            finish_span(ctx.session, verifier_span, output_value={"verified_count": len(verified)})
+        return {"findings": findings, "verified_findings": verified, "steps": steps}
 
     def write_report(state: ResearchState) -> dict:
         from app.engine.persistence import persist_report, sync_plan_and_steps
+
+        writer_task = None
+        trace_id = state.get("trace_id")
+        if isinstance(trace_id, str) and isinstance(state.get("project_id"), int) and ctx.session.get(ResearchProject, state["project_id"]) is not None and ctx.session.get(TraceRun, trace_id) is not None:
+            writer_task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="writer", title="Synthesize verified evidence", status="running", input_json={"verified_count": len(state.get("verified_findings") or state.get("findings", []))})
+            ctx.session.add(writer_task)
+            ctx.session.commit()
 
         try:
             analysis_md = _synthesize_report(ctx, state)
@@ -790,6 +869,11 @@ def make_nodes(ctx: EngineContext):
         report_md = _build_report_markdown(state, analysis_md=analysis_md)
         sync_plan_and_steps(ctx.session, state)
         report = persist_report(ctx.session, project_id=state["project_id"], content_md=report_md)
+        if writer_task is not None:
+            writer_task.status = "completed"
+            writer_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+            writer_task.output_json = {"report_id": report.id, "citation_count": report_md.count("[^")}
+            ctx.session.commit()
         publish_progress("research.report_ready", state, report_id=report.id)
         return {"report_md": report_md, "report_id": report.id}
 
