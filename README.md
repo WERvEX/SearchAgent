@@ -148,6 +148,22 @@ npm test
 npm run build
 ```
 
+安装完成后可用以下命令做一次完整验证：
+
+```powershell
+cd backend
+python -m pytest
+python -m playwright install chromium
+python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); b.close(); p.stop(); print('playwright-chromium-ok')"
+
+cd ..\frontend
+npm ci
+npm test
+npm run build
+```
+
+仓库的 GitHub Actions 也会在每次 push 和 pull request 时自动执行同样的后端测试、前端测试与生产构建检查。
+
 ## 项目结构
 
 ```text
