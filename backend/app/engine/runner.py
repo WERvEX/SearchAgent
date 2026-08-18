@@ -12,6 +12,8 @@ from app.engine.checkpointer import create_checkpointer
 from app.engine.context import EngineContext
 from app.engine.graph import compile_research_graph
 from app.services.report_markdown import normalize_report_markdown
+from app.services.tracing_service import finish_trace, start_trace
+from app.tools.policy import ensure_default_policies
 
 
 def _config(thread_id: str) -> dict:
@@ -58,6 +60,7 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
     project.conversation.status = {
         "planning": "planning",
         "awaiting_execution": "awaiting_execution",
+        "awaiting_approval": "awaiting_approval",
         "executing": "executing",
         "revising_report": "revising_report",
         "done": "completed",
@@ -157,12 +160,16 @@ def _record_message_once(
 
 
 def _waiting_status(payload: Optional[dict]) -> str:
+    if payload and payload.get("kind") == "tool_approval":
+        return "awaiting_approval"
     if payload and payload.get("kind") in {"planning_input", "clarification"}:
         return "planning"
     return "awaiting_execution"
 
 
 def _waiting_event(payload: dict) -> str:
+    if payload.get("kind") == "tool_approval":
+        return "research.tool_approval_required"
     if payload.get("kind") in {"planning_input", "clarification"}:
         return "research.planning_message"
     return "research.plan_ready"
@@ -171,11 +178,12 @@ def _waiting_event(payload: dict) -> str:
 def _persist_waiting_message(
     session: Session, *, thread_id: str, state: dict, profile_id: int, payload: Optional[dict]
 ) -> None:
-    if not payload or payload.get("kind") not in {
+    if not payload or payload.get("kind") == "tool_approval" or payload.get("kind") not in {
         "planning_input",
         "plan_ready",
         "clarification",
         "plan_approval",
+        "tool_approval",
     }:
         return
     question = str(payload.get("message") or "").strip()
@@ -215,6 +223,7 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
         "plan_ready": {"planning_message", "execute_plan", "plan_approval"},
         "clarification": {"clarification", "planning_message"},
         "plan_approval": {"plan_approval", "planning_message", "execute_plan"},
+        "tool_approval": {"tool_approval"},
     }
     if actual_kind not in compatible.get(expected_kind, {expected_kind}):
         raise ValueError(f"Expected a response for {expected_kind}")
@@ -273,6 +282,8 @@ async def start_research(
     session.add_all([message, project])
     session.commit()
     session.refresh(project)
+    ensure_default_policies(session)
+    trace_id = start_trace(session, project.id)
 
     thread_id = f"research-{project.id}-{uuid.uuid4().hex}"
     message.meta_json = _message_meta(
@@ -288,6 +299,7 @@ async def start_research(
 
     initial_state = {
         "run_id": thread_id,
+        "trace_id": trace_id,
         "conversation_id": conversation_id,
         "project_id": project.id,
         "response_language": response_language,
@@ -305,12 +317,15 @@ async def start_research(
         "findings": [],
         "report_md": None,
         "report_id": None,
+        "agent_tasks": [],
+        "verified_findings": [],
     }
     _publish_lifecycle("research.started", thread_id=thread_id, state=initial_state)
     try:
         result = await asyncio.to_thread(graph.invoke, initial_state, config)
     except Exception as exc:
         _update_project_status(session, initial_state, "failed")
+        finish_trace(session, trace_id, "failed")
         message = str(exc) if str(exc).startswith("No usable sources") else "Research run failed."
         _publish_lifecycle(
             "research.failed",
@@ -333,6 +348,7 @@ async def start_research(
             interrupt_payload=payload,
         )
     else:
+        finish_trace(session, trace_id, "completed")
         _publish_lifecycle(
             "research.completed",
             thread_id=thread_id,
@@ -342,6 +358,7 @@ async def start_research(
 
     return {
         "thread_id": thread_id,
+        "trace_id": trace_id,
         "state": state,
         "interrupted": payload is not None,
         "interrupt_payload": payload,
@@ -405,6 +422,8 @@ async def resume_research(
         result = await asyncio.to_thread(graph.invoke, Command(resume=decision), config)
     except Exception as exc:
         _update_project_status(session, state_before, "failed")
+        if state_before.get("trace_id"):
+            finish_trace(session, state_before["trace_id"], "failed")
         message = str(exc) if str(exc).startswith("No usable sources") else "Research run failed."
         _publish_lifecycle(
             "research.failed",
@@ -427,6 +446,8 @@ async def resume_research(
             interrupt_payload=payload,
         )
     else:
+        if state.get("trace_id"):
+            finish_trace(session, state["trace_id"], "completed")
         _publish_lifecycle(
             "research.completed",
             thread_id=thread_id,
@@ -436,6 +457,7 @@ async def resume_research(
 
     return {
         "thread_id": thread_id,
+        "trace_id": state.get("trace_id"),
         "state": state,
         "interrupted": payload is not None,
         "interrupt_payload": payload,

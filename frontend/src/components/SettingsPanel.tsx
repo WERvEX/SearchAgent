@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Pencil, PlugZap, Save, X } from "lucide-react";
-import type { LLMProfileCreate, LLMProfileRead, MCPServer } from "../api/types";
+import type { LLMProfileCreate, LLMProfileRead, MCPServer, ToolPolicy } from "../api/types";
+import { ToolPolicyPanel } from "./ToolPolicyPanel";
 import { useI18n } from "../i18n/I18nProvider";
 import {
   localizedMessage,
@@ -30,6 +31,10 @@ type SettingsPanelProps = {
   onSaveMaxSources: (value: number) => Promise<void> | void;
   onCreateServer: (payload: Omit<MCPServer, "id">) => Promise<void> | void;
   onUpdateServer?: (serverId: number, payload: Omit<MCPServer, "id">) => Promise<void> | void;
+  policies?: ToolPolicy[];
+  onCreatePolicy?: (payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => Promise<void>;
+  onUpdatePolicy?: (id: number, payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => Promise<void>;
+  onDeletePolicy?: (id: number) => Promise<void>;
 };
 
 type Feedback = {
@@ -190,6 +195,7 @@ export function SettingsPanel({
   onSaveMaxSources,
   onCreateServer,
   onUpdateServer,
+  policies = [], onCreatePolicy, onUpdatePolicy, onDeletePolicy,
 }: SettingsPanelProps) {
   const { t } = useI18n();
   const [profileForm, setProfileForm] = useState({
@@ -693,6 +699,8 @@ export function SettingsPanel({
               {maxSourcesSubmitting ? t("settings.saving") : t("settings.saveSourceLimit")}
             </button>
           </form>
+
+          {onCreatePolicy && onUpdatePolicy && onDeletePolicy ? <ToolPolicyPanel policies={policies} onCreate={onCreatePolicy} onUpdate={onUpdatePolicy} onDelete={onDeletePolicy} /> : null}
 
           <form className="space-y-4 border border-zinc-200 bg-white p-4" onSubmit={handleServerSubmit} aria-busy={serverSubmitting}>
             <div>

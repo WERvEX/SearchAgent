@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.db.models import Conversation, LLMProfile, ResearchProject, Source, Step
+from app.db.models import AgentTask, Conversation, LLMProfile, ResearchProject, Source, Step, ToolApproval, ToolCall
 from app.engine import runner
 from app.schemas.research import (
     ResearchResumeRequest,
@@ -115,6 +115,22 @@ def project_execution_detail(
                 "created_at": report.created_at.isoformat(),
             }
             for report in sorted(project.reports, key=lambda item: (item.version, item.id))
+        ],
+        "agent_tasks": [
+            {"id": task.id, "role": task.role, "title": task.title, "status": task.status,
+             "input": task.input_json, "output": task.output_json}
+            for task in session.query(AgentTask).filter(AgentTask.project_id == project.id).order_by(AgentTask.id)
+        ],
+        "tool_calls": [
+            {"id": call.id, "task_id": call.task_id, "agent_role": call.agent_role,
+             "tool_name": call.tool_name, "status": call.status, "result_summary": call.result_summary,
+             "error": call.error}
+            for call in session.query(ToolCall).filter(ToolCall.project_id == project.id).order_by(ToolCall.id)
+        ],
+        "approvals": [
+            {"id": approval.id, "agent_role": approval.agent_role, "tool_name": approval.tool_name,
+             "decision": approval.decision, "args_fingerprint": approval.args_fingerprint}
+            for approval in session.query(ToolApproval).filter(ToolApproval.project_id == project.id).order_by(ToolApproval.id)
         ],
     }
 

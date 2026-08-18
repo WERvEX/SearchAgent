@@ -14,6 +14,7 @@ import type {
   ResearchLifecycleEvent,
   ResearchRunPhase,
   ResearchRunResponse,
+  ToolPolicy,
 } from "./api/types";
 import { AppPanel, AppShell } from "./components/AppShell";
 import { ConversationPanel } from "./components/ConversationPanel";
@@ -47,6 +48,9 @@ function deriveRunPhaseFromResponse(run: ResearchRunResponse): ResearchRunPhase 
   }
   if (run.interrupted && (kind === "plan_ready" || kind === "plan_approval")) {
     return "awaiting_execution";
+  }
+  if (run.interrupted && kind === "tool_approval") {
+    return "awaiting_approval";
   }
   if (run.state.phase === "executing" || run.state.status === "executing") {
     return "executing";
@@ -177,6 +181,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<LLMProfileRead[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
   const [servers, setServers] = useState<MCPServer[]>([]);
+  const [policies, setPolicies] = useState<ToolPolicy[]>([]);
   const [maxSources, setMaxSources] = useState(8);
   const [settingsLoadErrors, setSettingsLoadErrors] = useState<SettingsLoadErrors>({
     profiles: null,
@@ -303,6 +308,12 @@ export default function App() {
       return;
     }
 
+    if (event.event === "research.tool_approval_required") {
+      updateRunPhase("awaiting_approval");
+      setStatusMessageKey(statusMessageForPhase("awaiting_approval"));
+      return;
+    }
+
     if (event.event === "research.completed") {
       updateRunPhase("completed");
       setStatusMessageKey(statusMessageForPhase("completed"));
@@ -381,10 +392,11 @@ export default function App() {
         servers: null,
       });
 
-      const [profileResult, sourceLimitResult, serverResult] = await Promise.allSettled([
+      const [profileResult, sourceLimitResult, serverResult, policyResult] = await Promise.allSettled([
         api.listLLMProfiles(),
         loadMaxSourcesPreference(),
         api.listMCPServers(),
+        typeof api.listToolPolicies === "function" ? api.listToolPolicies() : Promise.resolve([] as ToolPolicy[]),
       ]);
 
       if (cancelled) {
@@ -421,6 +433,9 @@ export default function App() {
           ...current,
           servers: messageFromError(serverResult.reason, "app.failedToLoadMcpServers"),
         }));
+      }
+      if (policyResult.status === "fulfilled") {
+        setPolicies(policyResult.value);
       }
     }
 
@@ -737,6 +752,32 @@ export default function App() {
     }
   }
 
+  async function handleToolApproval(approved: boolean) {
+    if (!currentRun || !selectedProfileId || resumePendingRef.current) return;
+    const payload = currentRun.interrupt_payload ?? {};
+    resumePendingRef.current = true;
+    try {
+      updateRunPhase("resuming");
+      const run = await api.resumeResearch(currentRun.thread_id, {
+        profile_id: selectedProfileId,
+        response_language: locale,
+        decision: {
+          kind: "tool_approval",
+          approved,
+          agent_role: payload.agent_role,
+          tool_name: payload.tool_name,
+          args_fingerprint: payload.args_fingerprint,
+        },
+      });
+      await settleRun(run);
+    } catch (error) {
+      updateRunPhase("awaiting_approval");
+      setErrorMessage(messageFromError(error, "app.failedToResumeResearch"));
+    } finally {
+      resumePendingRef.current = false;
+    }
+  }
+
   async function handleRenameConversation(conversationId: number, title: string) {
     try {
       setErrorMessage(null);
@@ -851,6 +892,21 @@ export default function App() {
     setSettingsLoadErrors((current) => ({ ...current, servers: null }));
   }
 
+  async function handleCreatePolicy(payload: Omit<ToolPolicy, "id" | "version" | "created_at">) {
+    const created = await api.createToolPolicy(payload);
+    setPolicies((current) => [...current, created]);
+  }
+
+  async function handleUpdatePolicy(id: number, payload: Omit<ToolPolicy, "id" | "version" | "created_at">) {
+    const updated = await api.updateToolPolicy(id, payload);
+    setPolicies((current) => current.map((item) => item.id === id ? updated : item));
+  }
+
+  async function handleDeletePolicy(id: number) {
+    await api.deleteToolPolicy(id);
+    setPolicies((current) => current.filter((item) => item.id !== id));
+  }
+
   const backendDefaultProfile = profiles.find((profile) => profile.is_default) ?? null;
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
 
@@ -902,6 +958,10 @@ export default function App() {
             onSaveMaxSources={handleSaveMaxSources}
             onCreateServer={handleCreateServer}
             onUpdateServer={handleUpdateServer}
+            policies={policies}
+            onCreatePolicy={handleCreatePolicy}
+            onUpdatePolicy={handleUpdatePolicy}
+            onDeletePolicy={handleDeletePolicy}
             loadErrors={settingsLoadErrors}
           />
         ) : (
@@ -927,6 +987,8 @@ export default function App() {
                   }
                 : null
             }
+            toolApprovalPrompt={currentRun?.interrupt_payload?.kind === "tool_approval" ? currentRun.interrupt_payload : null}
+            onToolApproval={handleToolApproval}
             onSubmitPlanningAnswers={handlePlanningAnswers}
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen((current) => !current)}

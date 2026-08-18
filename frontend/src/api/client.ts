@@ -9,6 +9,7 @@ import type {
   ProjectExecutionDetail,
   ResearchFollowUpResponse,
   ResearchRunResponse,
+  ToolPolicy,
 } from "./types";
 
 export class ApiError extends Error {
@@ -73,6 +74,11 @@ export const api = {
   }) => request<ResearchFollowUpResponse>("/research/follow-up", json("POST", payload)),
   getProjectExecution: (projectId: number) =>
     request<ProjectExecutionDetail>(`/research/projects/${projectId}/execution`),
+  listToolPolicies: () => request<ToolPolicy[]>("/tool-policies"),
+  createToolPolicy: (payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => request<ToolPolicy>("/tool-policies", json("POST", payload)),
+  updateToolPolicy: (id: number, payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => request<ToolPolicy>(`/tool-policies/${id}`, json("PUT", payload)),
+  deleteToolPolicy: (id: number) => request<void>(`/tool-policies/${id}`, { method: "DELETE" }),
+  approveToolCall: (threadId: string, payload: { approved: boolean; profile_id?: number; agent_role: string; tool_name: string; args_fingerprint: string }) => request<ResearchRunResponse>(`/research/${encodeURIComponent(threadId)}/tool-approval`, json("POST", payload)),
   listLLMProfiles: () => request<LLMProfileRead[]>("/settings/llm-profiles"),
   createLLMProfile: (payload: LLMProfileCreate) =>
     request<LLMProfileRead>("/settings/llm-profiles", json("POST", payload)),

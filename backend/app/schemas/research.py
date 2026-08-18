@@ -75,6 +75,7 @@ class ResearchResumeRequest(BaseModel):
 
 class ResearchRunResponse(BaseModel):
     thread_id: str
+    trace_id: str | None = None
     state: dict[str, Any]
     interrupted: bool
     interrupt_payload: dict[str, Any] | None

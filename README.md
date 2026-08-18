@@ -33,6 +33,9 @@ SearchAgent 是一个本地优先的 AI 深度研究工作台。它用类似 Cod
 - OpenAI、Anthropic、DeepSeek、Xiaomi MiMo、Alibaba Qwen 和自定义服务预设
 - 本地 stdio 与远程 HTTP MCP 服务配置、测试和编辑
 - API Key 与 MCP 环境变量本地加密存储
+- 规划、检索、核验、写作四类 Agent 任务编排，检索任务最多三路协作
+- 本地 Trace、工具调用审计、Agent 级工具策略和运行中授权确认
+- 本地评测数据集、确定性指标及可选独立 LLM 裁判配置
 - 中英文界面、浏览器语言检测和语言偏好持久化
 
 ## 技术栈
@@ -122,6 +125,8 @@ SearchAgent 会识别名为 `bocha` 的配置，并使用保存的密钥调用�
 ├── secret.key       # API Key 与 MCP 环境变量的本地加密密钥
 └── reports/         # 生成的报告导出文件
 ```
+
+Trace、Agent 任务、工具策略、授权记录和评测结果也保存在 `searchagent.db`。权限策略按 Agent 角色和工具名匹配，未知工具默认暂停等待本次任务确认；批准不会写入持久化允许规则。首期是应用层隔离，不提供 MCP 进程的操作系统级沙箱。
 
 可以用 `SEARCHAGENT_HOME` 指定其他目录：
 

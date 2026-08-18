@@ -28,6 +28,8 @@ type ResearchWorkspaceProps = {
   detailsOpen?: boolean;
   onToggleDetails?: () => void;
   executionProgress?: { completed: number; total: number } | null;
+  toolApprovalPrompt?: Record<string, unknown> | null;
+  onToolApproval?: (approved: boolean) => void;
 };
 
 export function ResearchWorkspace({
@@ -53,6 +55,8 @@ export function ResearchWorkspace({
   detailsOpen = false,
   onToggleDetails,
   executionProgress = null,
+  toolApprovalPrompt = null,
+  onToolApproval,
 }: ResearchWorkspaceProps) {
   const { t } = useI18n();
   const [message, setMessage] = useState("");
@@ -219,6 +223,17 @@ export function ResearchWorkspace({
           </div>
         ) : null}
         {timelineContent ? <div>{timelineContent}</div> : null}
+        {toolApprovalPrompt ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <div className="font-medium">工具调用需要确认</div>
+            <p className="mt-1">{String(toolApprovalPrompt.agent_role ?? "agent")} 请求调用 {String(toolApprovalPrompt.tool_name ?? "tool")}。</p>
+            {toolApprovalPrompt.reason ? <p className="mt-1 text-xs text-amber-800">{String(toolApprovalPrompt.reason)}</p> : null}
+            <div className="mt-3 flex gap-2">
+              <button type="button" className="nav-button-active" onClick={() => onToolApproval?.(true)}>允许本次任务</button>
+              <button type="button" className="nav-button" onClick={() => onToolApproval?.(false)}>拒绝</button>
+            </div>
+          </div>
+        ) : null}
         {optimisticUserMessage ? (
           <div data-testid="optimistic-user-message" className="flex justify-end gap-3">
             <div className="max-w-[85%] rounded-2xl rounded-br-md bg-zinc-900 px-4 py-3 text-sm text-white">
