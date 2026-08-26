@@ -23,3 +23,11 @@ class ResearchState(TypedDict):
     findings: list[dict]
     report_md: Optional[str]
     report_id: Optional[int]
+    workflow_mode: Optional[str]
+    problem_definition: Optional[dict]
+    candidate_decisions: list[dict]
+    candidates: list[dict]
+    output_modes: list[str]
+    framing_round: int
+    development_phase: Optional[str]
+    candidate_selection_done: bool

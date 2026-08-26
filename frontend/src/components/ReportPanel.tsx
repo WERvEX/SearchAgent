@@ -75,6 +75,7 @@ export function ReportPanel({
   report,
   markdownUrl,
   pdfUrl,
+  jsonUrl,
   onLoadReport,
   versions = [],
   selectedReportId = null,
@@ -84,6 +85,7 @@ export function ReportPanel({
   report: ReportRead | null;
   markdownUrl: string | null;
   pdfUrl: string | null;
+  jsonUrl?: string | null;
   onLoadReport: () => void;
   versions?: Array<{ id: number; project_id?: number; version: number; created_at: string }>;
   selectedReportId?: number | null;
@@ -98,6 +100,7 @@ export function ReportPanel({
     () => report ? parseReportMarkdown(report.content_md) : null,
     [report],
   );
+  const rawText = report?.content_text ?? report?.content_md ?? "";
 
   async function downloadPdf() {
     if (!pdfUrl || !report || pdfPending) {
@@ -171,6 +174,7 @@ export function ReportPanel({
               Markdown
             </a>
           ) : null}
+          {jsonUrl ? <a className="nav-button" href={jsonUrl} download><Download className="h-4 w-4" aria-hidden="true" />JSON</a> : null}
           {pdfUrl ? (
             <button type="button" className="nav-button-active" onClick={downloadPdf} disabled={pdfPending || !report}>
               <FileDown className={`h-4 w-4 ${pdfPending ? "animate-pulse" : ""}`} aria-hidden="true" />
@@ -189,7 +193,7 @@ export function ReportPanel({
       ) : null}
       {expanded ? (
         <article className="space-y-3 p-4 sm:p-5">
-          {!parsed ? <p className="text-sm text-zinc-500">{t("report.empty")}</p> : (
+          {report?.format === "json" ? <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 text-xs leading-5 text-zinc-100">{rawText}</pre> : !parsed ? <p className="text-sm text-zinc-500">{t("report.empty")}</p> : (
             <>
               {parsed.objective ? <SectionCard section={parsed.objective} tone="highlight" /> : null}
               {parsed.summary ? <SectionCard section={parsed.summary} tone="highlight" /> : null}

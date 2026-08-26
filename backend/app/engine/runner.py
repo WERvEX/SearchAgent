@@ -68,6 +68,12 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
     }.get(status, "running")
     if state.get("objective"):
         project.objective = state["objective"]
+    if state.get("workflow_mode"):
+        project.workflow_mode = state["workflow_mode"]
+    if state.get("problem_definition") is not None:
+        project.problem_definition_json = state["problem_definition"]
+    if state.get("output_modes"):
+        project.output_modes_json = state["output_modes"]
     session.commit()
 
 
@@ -162,7 +168,7 @@ def _record_message_once(
 def _waiting_status(payload: Optional[dict]) -> str:
     if payload and payload.get("kind") == "tool_approval":
         return "awaiting_approval"
-    if payload and payload.get("kind") in {"planning_input", "clarification"}:
+    if payload and payload.get("kind") in {"planning_input", "clarification", "problem_framing", "candidate_selection"}:
         return "planning"
     return "awaiting_execution"
 
@@ -170,7 +176,7 @@ def _waiting_status(payload: Optional[dict]) -> str:
 def _waiting_event(payload: dict) -> str:
     if payload.get("kind") == "tool_approval":
         return "research.tool_approval_required"
-    if payload.get("kind") in {"planning_input", "clarification"}:
+    if payload.get("kind") in {"planning_input", "clarification", "problem_framing", "candidate_selection"}:
         return "research.planning_message"
     return "research.plan_ready"
 
@@ -184,6 +190,8 @@ def _persist_waiting_message(
         "clarification",
         "plan_approval",
         "tool_approval",
+        "problem_framing",
+        "candidate_selection",
     }:
         return
     question = str(payload.get("message") or "").strip()
@@ -219,7 +227,9 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
         decision = {**decision, "kind": "plan_approval"}
         actual_kind = "plan_approval"
     compatible = {
-        "planning_input": {"planning_message", "planning_answers", "clarification"},
+        "planning_input": {"planning_message", "planning_answers", "clarification", "problem_message", "problem_answers", "problem_confirm", "candidate_selection"},
+        "problem_framing": {"planning_message", "planning_answers", "problem_message", "problem_answers", "problem_confirm"},
+        "candidate_selection": {"candidate_selection", "planning_message"},
         "plan_ready": {"planning_message", "execute_plan", "plan_approval"},
         "clarification": {"clarification", "planning_message"},
         "plan_approval": {"plan_approval", "planning_message", "execute_plan"},
@@ -227,7 +237,7 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
     }
     if actual_kind not in compatible.get(expected_kind, {expected_kind}):
         raise ValueError(f"Expected a response for {expected_kind}")
-    if actual_kind == "planning_answers":
+    if actual_kind in {"planning_answers", "problem_answers"}:
         decision = {
             **decision,
             "message": _planning_answer_message(expected, decision.get("answers") or []),
@@ -257,6 +267,7 @@ async def start_research(
     profile_id: int,
     user_message: str,
     response_language: str = "zh-CN",
+    workflow_mode: str = "research",
     llm_factory: Optional[Callable[[], Any]] = None,
 ) -> dict:
     conversation = session.get(Conversation, conversation_id)
@@ -278,6 +289,8 @@ async def start_research(
         topic=user_message[:120],
         objective="",
         status="planning",
+        workflow_mode=workflow_mode,
+        output_modes_json=["human"],
     )
     session.add_all([message, project])
     session.commit()
@@ -317,6 +330,14 @@ async def start_research(
         "findings": [],
         "report_md": None,
         "report_id": None,
+        "workflow_mode": workflow_mode,
+        "problem_definition": None,
+        "candidate_decisions": [],
+        "candidates": [],
+        "output_modes": ["human"],
+        "framing_round": 0,
+        "development_phase": "problem_framing" if workflow_mode == "development_start" else None,
+        "candidate_selection_done": False,
         "agent_tasks": [],
         "verified_findings": [],
     }
@@ -409,6 +430,13 @@ async def resume_research(
                     } if decision["kind"] == "planning_answers" else None,
                 ),
             )
+    if decision["kind"] == "execute_plan":
+        modes = decision.get("output_modes") or ["human"]
+        state_before["output_modes"] = list(dict.fromkeys(modes))
+        project = session.get(ResearchProject, state_before.get("project_id"))
+        if project is not None:
+            project.output_modes_json = state_before["output_modes"]
+            session.commit()
     if decision["kind"] in {"execute_plan", "plan_approval"} and decision.get("approved", True):
         _update_project_status(session, state_before, "executing")
         _publish_lifecycle(

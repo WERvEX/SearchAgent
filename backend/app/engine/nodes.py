@@ -10,7 +10,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from app.core.events import get_event_bus
-from app.db.models import AgentTask, ResearchProject, Source, Step, TraceRun
+from app.db.models import AgentTask, ResearchCandidate, ResearchProject, Source, Step, TraceRun
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
 from app.services.settings_service import get_preference
@@ -142,6 +142,37 @@ def _response_language_instruction(state: ResearchState) -> str:
         f"The application language is {language}. Write every user-visible message, "
         f"plan summary, step title, step description, and report section in {language}."
     )
+
+
+def _development_problem_prompt(state: ResearchState) -> str:
+    return (
+        "You are a development kickoff facilitator. Work in a planning-only conversation. "
+        "Return JSON only. Ask at most three materially important single-choice questions, "
+        "each with 3-4 options and allow_custom true. Cover target user, problem, constraints, "
+        "non-goals, and measurable success criteria. Return {ready:false, phase:'problem_framing', "
+        "problem_definition:{goal, users, context, constraints, non_goals, success_criteria, assumptions}, "
+        "questions:[...]}. When the user has supplied enough detail, still return a concise problem_definition "
+        "and questions only for unresolved decisions."
+    )
+
+
+def _development_plan_prompt(state: ResearchState) -> str:
+    return (
+        "You are a development kickoff planner. Return JSON only. Based on the confirmed problem definition "
+        "and selected candidates, create a decision-complete implementation research plan with ready:true, "
+        "summary, steps, search_tasks, verification_tasks, risks, and candidates. Each step needs seq, title, "
+        "description, and status. Explain how adopted projects would be forked/pulled and used, but never ask "
+        "to execute installation or code changes. "
+    )
+
+
+def _discover_development_candidates(objective: str) -> list[dict]:
+    from app.tools.github import search_github_repositories
+
+    try:
+        return list(search_github_repositories(objective, count=6).get("candidates", []))
+    except Exception:
+        return []
 
 
 def _run_async(value: Any) -> Any:
@@ -350,6 +381,35 @@ def _build_report_markdown(state: ResearchState, analysis_md: str | None = None)
     return "\n".join(lines).strip() + "\n"
 
 
+def _build_ai_report(state: ResearchState) -> str:
+    findings = state.get("verified_findings") or state.get("findings", [])
+    sources = []
+    for index, item in enumerate(findings, start=1):
+        sources.append({
+            "id": f"s{index}",
+            "title": item.get("title") or item.get("url") or f"source-{index}",
+            "url": item.get("url") or "",
+            "excerpt": str(item.get("snippet") or item.get("content") or "")[:600],
+            "verified": bool(item.get("verified")),
+        })
+    payload = {
+        "schema_version": "1.0",
+        "workflow": state.get("workflow_mode") or "research",
+        "problem": state.get("problem_definition") or {"goal": state.get("objective", "")},
+        "decisions": {"candidates": state.get("candidate_decisions") or []},
+        "candidates": state.get("candidates") or [],
+        "plan": state.get("plan") or {"steps": state.get("steps") or []},
+        "findings": [
+            {"id": f"f{index}", "claim": item.get("snippet") or item.get("title"), "source_ids": [f"s{index}"], "verified": bool(item.get("verified"))}
+            for index, item in enumerate(findings, start=1)
+        ],
+        "verification": [{"step": step.get("title"), "status": step.get("status")} for step in state.get("steps", [])],
+        "next_actions": [step.get("title") for step in state.get("steps", []) if step.get("status") not in {"completed", "done"}],
+        "sources": sources,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+
+
 def _normalize_report_analysis(content: str, source_count: int) -> str | None:
     content = str(content or "").strip()
     content = re.sub(r"^#\s+(?:研究报告|Research Report)\s*", "", content, flags=re.IGNORECASE)
@@ -441,27 +501,58 @@ def make_nodes(ctx: EngineContext):
         latest_user = _latest_user_message(state.get("messages", []))
         current_objective = str(state.get("objective") or "").strip()
         previous_plan = state.get("plan") or {}
-        prompt = (
-            "You are a research planning assistant. Clarify the objective in a planning-only "
-            "chat, then return one JSON "
-            "object and no prose. If important scope is missing or the user is asking for an "
-            "explanation, return {\"ready\": false, \"message\": \"...\", \"objective\": \"...\", "
-            "\"questions\": [{\"id\": \"q1\", \"prompt\": \"...\", \"options\": "
-            "[{\"id\": \"o1\", \"label\": \"...\", \"description\": \"...\"}, "
-            "{\"id\": \"o2\", \"label\": \"...\"}], \"allow_custom\": true}]}. "
-            "Return between one and three single-choice questions when useful, with two to four "
-            "meaningfully different options per question. "
-            "When the work is decision-complete, return {\"ready\": true, \"message\": \"...\", "
-            "\"objective\": \"...\", \"summary\": \"...\", \"steps\": [{\"seq\": 1, "
-            "\"title\": \"...\", \"description\": \"...\", \"status\": \"pending\"}]}. "
-            "Ask only questions that materially change the research. A user message after a "
-            "previous plan requests discussion or revision; produce a new ready plan only when "
-            "their concern has been incorporated.\n"
-            f"{_response_language_instruction(state)}\n"
-            f"Conversation:\n{_conversation_context(state.get('messages', []))}\n"
-            f"Current objective: {current_objective}\n"
-            f"Previous plan: {json.dumps(previous_plan, ensure_ascii=False)}"
-        )
+        development = state.get("workflow_mode") == "development_start"
+        problem = state.get("problem_definition") or {}
+        candidate_selection_done = bool(state.get("candidate_selection_done"))
+        if development and not problem.get("confirmed"):
+            prompt = (
+                f"{_development_problem_prompt(state)}\n"
+                f"{_response_language_instruction(state)}\n"
+                f"Conversation:\n{_conversation_context(state.get('messages', []))}\n"
+                f"Current objective: {current_objective}\n"
+                f"Current problem definition: {json.dumps(problem, ensure_ascii=False)}"
+            )
+        elif development and not candidate_selection_done:
+            prompt = (
+                "Return JSON only with ready:false, phase:'candidate_selection', message, and candidates. "
+                "Candidates must be objects with candidate_key, source_type, title, url, description, license, "
+                "version_or_branch, activity, and evidence_refs.\n"
+                f"{_response_language_instruction(state)}\n"
+                f"Objective: {current_objective}\n"
+                f"Problem definition: {json.dumps(problem, ensure_ascii=False)}"
+            )
+        elif development:
+            prompt = (
+                f"{_development_plan_prompt(state)}\n"
+                f"{_response_language_instruction(state)}\n"
+                f"Objective: {current_objective}\n"
+                f"Problem definition: {json.dumps(problem, ensure_ascii=False)}\n"
+                f"Candidate decisions: {json.dumps(state.get('candidate_decisions', []), ensure_ascii=False)}\n"
+                f"Candidates: {json.dumps(state.get('candidates', []), ensure_ascii=False)}\n"
+                f"Previous plan: {json.dumps(previous_plan, ensure_ascii=False)}"
+            )
+        else:
+            prompt = (
+                "You are a research planning assistant. Clarify the objective in a planning-only "
+                "chat, then return one JSON "
+                "object and no prose. If important scope is missing or the user is asking for an "
+                "explanation, return {\"ready\": false, \"message\": \"...\", \"objective\": \"...\", "
+                "\"questions\": [{\"id\": \"q1\", \"prompt\": \"...\", \"options\": "
+                "[{\"id\": \"o1\", \"label\": \"...\", \"description\": \"...\"}, "
+                "{\"id\": \"o2\", \"label\": \"...\"}], \"allow_custom\": true}]}. "
+                "Return between one and three single-choice questions when useful, with two to four "
+                "meaningfully different options per question. "
+                "When the work is decision-complete, return {\"ready\": true, \"message\": \"...\", "
+                "\"objective\": \"...\", \"summary\": \"...\", \"steps\": [{\"seq\": 1, "
+                "\"title\": \"...\", \"description\": \"...\", \"status\": \"pending\"}]}. "
+                "Ask only questions that materially change the research. A user message after a "
+                "previous plan requests discussion or revision; produce a new ready plan only when "
+                "their concern has been incorporated.\n"
+                f"{_response_language_instruction(state)}\n"
+                f"Conversation:\n{_conversation_context(state.get('messages', []))}\n"
+                f"Current objective: {current_objective}\n"
+                f"Previous plan: {json.dumps(previous_plan, ensure_ascii=False)}"
+            )
 
         llm = _get_llm(ctx)
         try:
@@ -477,6 +568,44 @@ def make_nodes(ctx: EngineContext):
             and isinstance(parsed.get("options"), list)
         )
 
+        if development and not candidate_selection_done and problem.get("confirmed"):
+            candidates = parsed.get("candidates") if isinstance(parsed, dict) and isinstance(parsed.get("candidates"), list) else []
+            if not candidates:
+                candidates = _discover_development_candidates(current_objective or latest_user)
+            normalized = [item for item in candidates if isinstance(item, dict) and item.get("url")][:12]
+            for item in normalized:
+                existing = ctx.session.query(ResearchCandidate).filter_by(
+                    project_id=state.get("project_id"), candidate_key=str(item.get("candidate_key") or item.get("url"))
+                ).one_or_none()
+                if existing is None and isinstance(state.get("project_id"), int):
+                    ctx.session.add(ResearchCandidate(
+                        project_id=state["project_id"], candidate_key=str(item.get("candidate_key") or item.get("url")),
+                        source_type=str(item.get("source_type") or "web"), title=str(item.get("title") or item.get("url")),
+                        url=str(item["url"]), description=item.get("description"), license=item.get("license"),
+                        version_or_branch=item.get("version_or_branch"), activity=json.dumps(item.get("activity"), ensure_ascii=False) if isinstance(item.get("activity"), dict) else item.get("activity"),
+                        evidence_json={"refs": item.get("evidence_refs") or []},
+                    ))
+            ctx.session.commit()
+            return {"candidates": normalized, "development_phase": "candidate_selection", "planner_message": str((parsed.get("message") if isinstance(parsed, dict) else "") or "请选择候选项目的参考或采用方式。"), "planner_questions": [], "plan_ready": False, "candidate_selection_done": False}
+
+        if development and not problem.get("confirmed"):
+            problem_definition = dict(parsed.get("problem_definition") or problem) if isinstance(parsed, dict) else dict(problem)
+            problem_definition.setdefault("goal", current_objective or latest_user)
+            return {
+                "objective": current_objective or latest_user,
+                "problem_definition": problem_definition,
+                "planner_message": str((parsed.get("message") if isinstance(parsed, dict) else "") or "请继续梳理问题定义。"),
+                "planner_questions": _normalize_planning_questions(parsed.get("questions") if isinstance(parsed, dict) else []),
+                "development_phase": "problem_framing",
+                "plan_ready": False,
+                "approved": False,
+            }
+        if development and isinstance(parsed, dict) and parsed.get("problem_definition"):
+            problem_definition = dict(parsed.get("problem_definition"))
+            problem_definition.setdefault("goal", current_objective or latest_user)
+        else:
+            problem_definition = problem
+
         if isinstance(parsed, dict) and parsed.get("ready") is False:
             message = str(parsed.get("message") or (
                 "请补充研究目标的具体范围。" if _is_chinese(state)
@@ -490,13 +619,16 @@ def make_nodes(ctx: EngineContext):
                 planner_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
                 planner_task.output_json = {"ready": False, "question_count": len(questions)}
                 ctx.session.commit()
-            return {
+            result = {
                 "objective": objective,
                 "planner_message": message,
                 "planner_questions": questions,
                 "plan_ready": False,
                 "approved": False,
             }
+            if development:
+                result.update({"problem_definition": problem_definition, "development_phase": "problem_framing"})
+            return result
 
         objective = (
             str(parsed.get("objective") or "").strip()
@@ -532,6 +664,9 @@ def make_nodes(ctx: EngineContext):
                 )),
                 "steps": steps if isinstance(steps, list) and steps else _fallback_steps(chinese=_is_chinese(state)),
             }
+            for key in ("search_tasks", "verification_tasks", "risks", "candidates"):
+                if isinstance(parsed.get(key), list):
+                    plan[key] = parsed[key]
             message = str(parsed.get("message") or (
                 "计划已经准备完成，可以开始执行。" if _is_chinese(state)
                 else "The plan is ready to execute."
@@ -553,6 +688,8 @@ def make_nodes(ctx: EngineContext):
             "plan": plan,
             "steps": plan["steps"],
         }
+        if development:
+            next_state.update({"problem_definition": {**problem_definition, "confirmed": True}, "development_phase": "plan_ready"})
         version = persist_plan_version(ctx.session, next_state)
         publish_progress(
             "research.plan_ready",
@@ -619,8 +756,11 @@ def make_nodes(ctx: EngineContext):
         return {"steps": response}
 
     def _planning_interrupt(state: ResearchState, *, ready: bool) -> dict:
+        development = state.get("workflow_mode") == "development_start"
+        phase = state.get("development_phase") or ("plan_ready" if ready else "problem_framing")
         payload = {
-            "kind": "plan_ready" if ready else "planning_input",
+            "kind": "plan_ready" if ready else ("candidate_selection" if phase == "candidate_selection" else "problem_framing" if development else "planning_input"),
+            "phase": phase,
             "message": state.get("planner_message") or (
                 (
                     "计划已经准备完成，可以开始执行。"
@@ -637,6 +777,9 @@ def make_nodes(ctx: EngineContext):
         }
         if not ready and state.get("planner_questions"):
             payload["questions"] = state["planner_questions"]
+        if development:
+            payload["problem_definition"] = state.get("problem_definition") or {}
+            payload["candidates"] = state.get("candidates") or []
         if ready:
             payload.update({
                 "plan": state.get("plan"),
@@ -658,7 +801,24 @@ def make_nodes(ctx: EngineContext):
                 kind = "planning_message"
                 response = {**response, "message": response.get("feedback")}
 
-        if kind == "planning_answers":
+        if kind == "candidate_selection":
+            selections = response.get("selections") or []
+            if not isinstance(selections, list):
+                raise ValueError("Expected candidate selections")
+            decisions = [item for item in selections if isinstance(item, dict) and item.get("candidate_key") and item.get("decision") in {"reference", "adopt"}]
+            for item in decisions:
+                candidate = ctx.session.query(ResearchCandidate).filter_by(project_id=state.get("project_id"), candidate_key=str(item["candidate_key"])).one_or_none()
+                if candidate is not None:
+                    candidate.decision = str(item["decision"])
+            ctx.session.commit()
+            return {"candidate_decisions": decisions, "candidate_selection_done": True, "development_phase": "plan_generation", "messages": [{"role": "user", "content": json.dumps(decisions, ensure_ascii=False)}]}
+        if kind == "problem_confirm":
+            if not response.get("confirmed"):
+                return {"messages": [{"role": "user", "content": str(response.get("feedback") or "请继续补充问题定义。") }], "planner_message": None}
+            problem = dict(state.get("problem_definition") or {})
+            problem["confirmed"] = True
+            return {"problem_definition": problem, "development_phase": "candidate_selection", "messages": [{"role": "user", "content": "问题定义已确认。"}]}
+        if kind in {"problem_answers", "planning_answers"}:
             message = str(response.get("message") or "").strip()
             if not message:
                 raise ValueError("A summarized planning answer is required")
@@ -683,6 +843,7 @@ def make_nodes(ctx: EngineContext):
             return {
                 "approved": True,
                 "response_language": response.get("response_language") or state.get("response_language"),
+                "output_modes": list(dict.fromkeys(response.get("output_modes") or state.get("output_modes") or ["human"])),
             }
         raise ValueError("Expected planning_message or execute_plan")
 
@@ -718,7 +879,11 @@ def make_nodes(ctx: EngineContext):
                 agent_tasks.append({"id": task.id, "role": task.role, "title": task.title, "status": task.status})
             ctx.session.commit()
         coordinator_span = start_span(ctx.session, trace_id, "agent:coordinator", kind="agent", attributes={"role": "coordinator", "parallel_limit": 3}, input_value=state.get("objective")) if trace_id else None
-        tool_result = _run_async(registry.get_research_tools(ctx.session))
+        tool_result = _run_async(
+            registry.get_research_tools(ctx.session, include_development=True)
+            if state.get("workflow_mode") == "development_start"
+            else registry.get_research_tools(ctx.session)
+        )
         tools = tool_result.get("tools", [])
         tools_by_name = {_tool_name(tool): tool for tool in tools}
 
@@ -868,14 +1033,19 @@ def make_nodes(ctx: EngineContext):
             analysis_md = None
         report_md = _build_report_markdown(state, analysis_md=analysis_md)
         sync_plan_and_steps(ctx.session, state)
-        report = persist_report(ctx.session, project_id=state["project_id"], content_md=report_md)
+        report = persist_report(ctx.session, project_id=state["project_id"], content_md=report_md, content_text=report_md, format="md")
+        ai_report_id = None
+        if "ai" in (state.get("output_modes") or []):
+            ai_content = _build_ai_report(state)
+            ai_report = persist_report(ctx.session, project_id=state["project_id"], content_text=ai_content, format="json")
+            ai_report_id = ai_report.id
         if writer_task is not None:
             writer_task.status = "completed"
             writer_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
-            writer_task.output_json = {"report_id": report.id, "citation_count": report_md.count("[^")}
+            writer_task.output_json = {"report_id": report.id, "ai_report_id": ai_report_id, "citation_count": report_md.count("[^")}
             ctx.session.commit()
         publish_progress("research.report_ready", state, report_id=report.id)
-        return {"report_md": report_md, "report_id": report.id}
+        return {"report_md": report_md, "report_id": report.id, "ai_report_id": ai_report_id}
 
     return {
         "plan_conversation": plan_conversation,

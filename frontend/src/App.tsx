@@ -14,6 +14,7 @@ import type {
   ResearchLifecycleEvent,
   ResearchRunPhase,
   ResearchRunResponse,
+  WorkflowMode,
   ToolPolicy,
 } from "./api/types";
 import { AppPanel, AppShell } from "./components/AppShell";
@@ -43,7 +44,7 @@ function createPlaceholderRun(threadId: string): ResearchRunResponse {
 
 function deriveRunPhaseFromResponse(run: ResearchRunResponse): ResearchRunPhase {
   const kind = run.interrupt_payload?.kind;
-  if (run.interrupted && (kind === "planning_input" || kind === "clarification")) {
+  if (run.interrupted && (kind === "planning_input" || kind === "clarification" || kind === "problem_framing" || kind === "candidate_selection")) {
     return "planning";
   }
   if (run.interrupted && (kind === "plan_ready" || kind === "plan_approval")) {
@@ -202,6 +203,8 @@ export default function App() {
   const [lastFollowUp, setLastFollowUp] = useState<string | null>(null);
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
   const [assistantThinking, setAssistantThinking] = useState(false);
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("research");
+  const [selectedOutputModes, setSelectedOutputModes] = useState<Array<"human" | "ai">>(["human"]);
   const resumePendingRef = useRef(false);
 
   const reportId =
@@ -474,6 +477,7 @@ export default function App() {
         setActiveConversation(detail);
         setCurrentRun(activeRun);
         const loadedProject = getLatestProject(detail);
+        setWorkflowMode(loadedProject?.workflow_mode ?? "research");
         const latestReportId = loadedProject?.latest_report_id ?? null;
         setRetainedReportId(latestReportId);
         setRouteNotice(null);
@@ -556,6 +560,11 @@ export default function App() {
       : runPhase === "awaiting_execution"
         ? latestProject?.plans?.at(-1)?.version ?? null
         : null;
+  const workflowModeLocked = Boolean(
+    currentRun ||
+    latestProject ||
+    activeConversation?.messages.some((item) => item.role === "user"),
+  );
 
   const refreshConversation = useCallback(async () => {
     if (!activeConversationId) {
@@ -567,6 +576,7 @@ export default function App() {
       current.map((conversation) => (conversation.id === detail.id ? detail : conversation)),
     );
     const project = getLatestProject(detail);
+    setWorkflowMode(project?.workflow_mode ?? "research");
     if (project) {
       try {
         setExecutionDetail(await api.getProjectExecution(project.id));
@@ -656,6 +666,40 @@ export default function App() {
     }
   }
 
+  async function resumeDevelopment(decision: Record<string, unknown>) {
+    if (!currentRun || !selectedProfileId || resumePendingRef.current) return;
+    resumePendingRef.current = true;
+    const fallbackPhase = runPhase;
+    try {
+      setErrorMessage(null);
+      updateRunPhase("resuming");
+      const run = await api.resumeResearch(currentRun.thread_id, {
+        profile_id: selectedProfileId,
+        response_language: locale,
+        decision,
+      });
+      await settleRun(run);
+    } catch (error) {
+      updateRunPhase(fallbackPhase);
+      setErrorMessage(messageFromError(error, "app.failedToResumeResearch"));
+    } finally {
+      resumePendingRef.current = false;
+    }
+  }
+
+  function handleProblemConfirm(confirmed: boolean, feedback?: string) {
+    void resumeDevelopment(confirmed ? { kind: "problem_confirm", confirmed: true } : { kind: "problem_message", message: feedback || "请继续补充问题定义。" });
+  }
+
+  function handleCandidateSelection(selections: Array<{ candidate_key: string; decision: "reference" | "adopt" }>) {
+    void resumeDevelopment({ kind: "candidate_selection", selections });
+  }
+
+  function handleOutputModes(modes: Array<"human" | "ai">) {
+    setSelectedOutputModes(modes);
+    if (currentPlanVersion !== null) void handleExecutePlan(currentPlanVersion, modes);
+  }
+
   async function handleFollowUp(message: string, routeOverride?: "replan" | "report_revision") {
     if (!activeConversation || !latestProject || !selectedProfileId) {
       return;
@@ -713,12 +757,14 @@ export default function App() {
       setErrorMessage(null);
       setCurrentRun(null);
       updateRunPhase("starting");
-      const run = await api.startResearch({
+      const startPayload = {
         conversation_id: activeConversation.id,
         profile_id: selectedProfileId,
         user_message: message,
         response_language: locale,
-      });
+        ...(workflowMode === "development_start" ? { workflow_mode: workflowMode } : {}),
+      };
+      const run = await api.startResearch(startPayload);
       await settleRun(run);
     } catch (error) {
       updateRunPhase("idle");
@@ -729,7 +775,7 @@ export default function App() {
     }
   }
 
-  async function handleExecutePlan(version: number) {
+  async function handleExecutePlan(version: number, modes: Array<"human" | "ai"> = selectedOutputModes) {
     if (!currentRun || !selectedProfileId || resumePendingRef.current || version !== currentPlanVersion) {
       return;
     }
@@ -741,7 +787,11 @@ export default function App() {
       const run = await api.resumeResearch(currentRun.thread_id, {
         profile_id: selectedProfileId,
         response_language: locale,
-        decision: { kind: "execute_plan", plan_version: version },
+        decision: {
+          kind: "execute_plan",
+          plan_version: version,
+          ...(workflowMode === "development_start" ? { output_modes: modes } : {}),
+        },
       });
       await settleRun(run);
     } catch (error) {
@@ -972,6 +1022,9 @@ export default function App() {
             streamStatus={eventStream.status}
             runPhase={runPhase}
             onSend={handleSendMessage}
+            workflowMode={workflowMode}
+            onWorkflowModeChange={setWorkflowMode}
+            workflowModeLocked={workflowModeLocked}
             plans={plans}
             currentPlanVersion={currentPlanVersion}
             currentPlanProjectId={latestProject?.id ?? null}
@@ -987,6 +1040,20 @@ export default function App() {
                   }
                 : null
             }
+            developmentPrompt={
+              currentRun?.interrupt_payload && workflowMode === "development_start"
+                ? {
+                    phase: typeof currentRun.interrupt_payload.phase === "string"
+                      ? currentRun.interrupt_payload.phase
+                      : currentRun.interrupt_payload.kind === "plan_ready" ? "plan_ready" : undefined,
+                    problem_definition: (currentRun.interrupt_payload.problem_definition as Record<string, unknown> | undefined) ?? undefined,
+                    candidates: Array.isArray(currentRun.interrupt_payload.candidates) ? currentRun.interrupt_payload.candidates as Array<Record<string, unknown>> : [],
+                  }
+                : null
+            }
+            onProblemConfirm={handleProblemConfirm}
+            onCandidateSelection={handleCandidateSelection}
+            onOutputModes={handleOutputModes}
             toolApprovalPrompt={currentRun?.interrupt_payload?.kind === "tool_approval" ? currentRun.interrupt_payload : null}
             onToolApproval={handleToolApproval}
             onSubmitPlanningAnswers={handlePlanningAnswers}
@@ -1012,6 +1079,7 @@ export default function App() {
                   <ReportPanel
                     report={report}
                     markdownUrl={api.markdownDownloadUrl(reportId)}
+                    jsonUrl={workflowMode === "development_start" && latestProject?.output_modes?.includes("ai") ? `/api/reports/${reportId}/download.json` : null}
                     pdfUrl={api.pdfDownloadUrl(reportId)}
                     onLoadReport={handleLoadReport}
                     versions={reportVersions}

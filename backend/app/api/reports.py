@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from playwright.async_api import Error as PlaywrightError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -30,9 +31,24 @@ def download_markdown(report_id: int, session: Session = Depends(get_db)):
     report.file_path = str(path)
     session.commit()
     return Response(
-        content=path.read_text(encoding="utf-8"),
+        content=(report.content_text or path.read_text(encoding="utf-8")),
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+    )
+
+
+@router.get("/{report_id}/download.json")
+def download_json(report_id: int, session: Session = Depends(get_db)):
+    report = _get_report_or_404(session, report_id)
+    if report.format != "json":
+        report = session.scalars(
+            select(Report).where(Report.project_id == report.project_id, Report.format == "json").order_by(Report.id.desc())
+        ).first() or report
+    content = report.content_text or report.content_md
+    return Response(
+        content=content,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="searchagent-report-{report.id}.json"'},
     )
 
 

@@ -24,12 +24,17 @@ async def start_research_endpoint(
         raise HTTPException(status_code=404, detail="Conversation not found")
     if session.get(LLMProfile, payload.profile_id) is None:
         raise HTTPException(status_code=404, detail="LLM profile not found")
+    kwargs = {
+        "conversation_id": payload.conversation_id,
+        "profile_id": payload.profile_id,
+        "user_message": payload.user_message,
+        "response_language": payload.response_language,
+    }
+    if payload.workflow_mode != "research":
+        kwargs["workflow_mode"] = payload.workflow_mode
     return await runner.start_research(
         session,
-        conversation_id=payload.conversation_id,
-        profile_id=payload.profile_id,
-        user_message=payload.user_message,
-        response_language=payload.response_language,
+        **kwargs,
     )
 
 

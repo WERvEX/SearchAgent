@@ -35,6 +35,10 @@ export type ConversationDetail = ConversationRead & {
     topic: string;
     objective: string | null;
     status: string;
+    workflow_mode?: WorkflowMode;
+    problem_definition?: Record<string, unknown> | null;
+    candidates?: Array<Record<string, unknown>>;
+    output_modes?: string[];
     created_at: string;
     latest_report_id: number | null;
     latest_report_version: number | null;
@@ -85,6 +89,8 @@ export type ResearchRunResponse = {
   interrupted: boolean;
   interrupt_payload: Record<string, unknown> | null;
 };
+export type WorkflowMode = "research" | "development_start";
+export type OutputMode = "human" | "ai";
 
 export type ResearchRunPhase =
   | "idle"
@@ -149,6 +155,7 @@ export type ReportRead = {
   version: number;
   format: string;
   content_md: string;
+  content_text?: string | null;
   file_path: string | null;
   created_at: string;
 };

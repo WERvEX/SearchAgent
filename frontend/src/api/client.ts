@@ -58,7 +58,7 @@ export const api = {
     request<void>(`/conversations/${id}`, { method: "DELETE" }),
   listConversations: () => request<ConversationRead[]>("/conversations"),
   getConversation: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
-    startResearch: (payload: { conversation_id: number; profile_id: number; user_message: string; response_language: "en" | "zh-CN" }) =>
+    startResearch: (payload: { conversation_id: number; profile_id: number; user_message: string; response_language: "en" | "zh-CN"; workflow_mode?: "research" | "development_start" }) =>
     request<ResearchRunResponse>("/research/start", json("POST", payload)),
   getActiveResearch: (conversationId: number) =>
     request<ResearchRunResponse | null>(`/research/active/${conversationId}`),
@@ -95,4 +95,5 @@ export const api = {
   getReport: (id: number) => request<ReportRead>(`/reports/${id}`),
   markdownDownloadUrl: (id: number) => `/api/reports/${id}/download.md`,
   pdfDownloadUrl: (id: number) => `/api/reports/${id}/download.pdf`,
+  jsonDownloadUrl: (id: number) => `/api/reports/${id}/download.json`,
 };

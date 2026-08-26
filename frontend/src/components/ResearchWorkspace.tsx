@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Activity, Bot, LoaderCircle, Send, User } from "lucide-react";
-import type { ConversationDetail, PlanArtifact, PlanningAnswer, PlanningQuestion, ResearchRunPhase } from "../api/types";
+import type { ConversationDetail, PlanArtifact, PlanningAnswer, PlanningQuestion, ResearchRunPhase, WorkflowMode } from "../api/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { PlanCard } from "./PlanCard";
 import { PlanningQuestionCard } from "./PlanningQuestionCard";
+import { CandidateDecisionCard, OutputModeCard, ProblemDefinitionCard, type DevelopmentPrompt } from "./DevelopmentStartCards";
 
 type ResearchWorkspaceProps = {
   conversation: ConversationDetail | null;
@@ -30,6 +31,13 @@ type ResearchWorkspaceProps = {
   executionProgress?: { completed: number; total: number } | null;
   toolApprovalPrompt?: Record<string, unknown> | null;
   onToolApproval?: (approved: boolean) => void;
+  workflowMode?: WorkflowMode;
+  onWorkflowModeChange?: (mode: WorkflowMode) => void;
+  workflowModeLocked?: boolean;
+  developmentPrompt?: DevelopmentPrompt | null;
+  onProblemConfirm?: (confirmed: boolean, feedback?: string) => void;
+  onCandidateSelection?: (selections: Array<{ candidate_key: string; decision: "reference" | "adopt" }>) => void;
+  onOutputModes?: (modes: Array<"human" | "ai">) => void;
 };
 
 export function ResearchWorkspace({
@@ -57,6 +65,13 @@ export function ResearchWorkspace({
   executionProgress = null,
   toolApprovalPrompt = null,
   onToolApproval,
+  workflowMode = "research",
+  onWorkflowModeChange,
+  workflowModeLocked,
+  developmentPrompt = null,
+  onProblemConfirm,
+  onCandidateSelection,
+  onOutputModes,
 }: ResearchWorkspaceProps) {
   const { t } = useI18n();
   const [message, setMessage] = useState("");
@@ -64,6 +79,11 @@ export function ResearchWorkspace({
   const trimmed = message.trim();
   const busy = ["starting", "active", "resuming", "executing", "revising_report"].includes(runPhase);
   const awaitingClarification = runPhase === "awaiting_clarification";
+  const modeLocked = workflowModeLocked ?? Boolean(
+    conversation?.projects.length ||
+    conversation?.messages.some((item) => item.role === "user"),
+  );
+  const workflowLabel = workflowMode === "development_start" ? "项目/功能启动" : "通用研究";
   const legacyComposer = !onSend && Boolean(onStart || onClarify);
   const canChat = !busy;
   const hasStructuredQuestions = Boolean(planningPrompt?.questions.length);
@@ -112,7 +132,7 @@ export function ResearchWorkspace({
 
   return (
     <section className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-4 border-b border-zinc-200 bg-white px-5 py-4">
+      <div className="flex flex-col items-stretch gap-3 border-b border-zinc-200 bg-white px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold text-zinc-950">
             {conversation?.title ?? t("workspace.selectConversation")}
@@ -122,8 +142,37 @@ export function ResearchWorkspace({
           {statusLabel}
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-xs text-zinc-500">
+        <div className="flex w-full shrink-0 flex-wrap items-center justify-start gap-2 text-xs text-zinc-500 sm:w-auto sm:justify-end">
           {profileName ? <span className="rounded-full bg-zinc-100 px-2.5 py-1">{profileName}</span> : null}
+          {conversation && !modeLocked && !currentPlanVersion && !busy ? (
+            <div className="workflow-switch" role="group" aria-label="工作流模式">
+              <button
+                type="button"
+                className={`workflow-switch-option ${workflowMode === "research" ? "workflow-switch-option-active" : ""}`}
+                aria-pressed={workflowMode === "research"}
+                onClick={() => onWorkflowModeChange?.("research")}
+              >
+                通用研究
+              </button>
+              <button
+                type="button"
+                className={`workflow-switch-option ${workflowMode === "development_start" ? "workflow-switch-option-active" : ""}`}
+                aria-pressed={workflowMode === "development_start"}
+                onClick={() => onWorkflowModeChange?.("development_start")}
+              >
+                项目/功能启动
+              </button>
+            </div>
+          ) : null}
+          {conversation && modeLocked ? (
+            <span
+              className="workflow-mode-locked"
+              aria-label={`工作流模式：${workflowLabel}，已锁定`}
+              title="工作流模式已锁定；如需切换，请新建会话"
+            >
+              {workflowLabel} · 已锁定
+            </span>
+          ) : null}
           {streamStatus ? <span className="rounded-full border border-zinc-200 px-2.5 py-1">{streamStatus}</span> : null}
           {conversation && onToggleDetails ? (
             <button
@@ -268,6 +317,9 @@ export function ResearchWorkspace({
             onSubmit={onSubmitPlanningAnswers}
           />
         ) : null}
+        {developmentPrompt?.phase === "problem_framing" && developmentPrompt.problem_definition ? <ProblemDefinitionCard problem={developmentPrompt.problem_definition} onConfirm={onProblemConfirm} onContinue={(message) => onProblemConfirm?.(false, message)} /> : null}
+        {developmentPrompt?.phase === "candidate_selection" ? <CandidateDecisionCard candidates={developmentPrompt.candidates ?? []} onSubmit={onCandidateSelection} /> : null}
+        {developmentPrompt?.phase === "plan_ready" ? <OutputModeCard pending={runPhase === "resuming" || runPhase === "executing"} onSubmit={onOutputModes} /> : null}
         </div>
       </div>
 

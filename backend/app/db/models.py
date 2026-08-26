@@ -53,6 +53,9 @@ class ResearchProject(Base):
     topic: Mapped[str] = mapped_column()
     objective: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(default="draft")
+    workflow_mode: Mapped[str] = mapped_column(default="research")
+    problem_definition_json: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
+    output_modes_json: Mapped[Optional[list]] = mapped_column(JSON, default=None)
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
     conversation: Mapped["Conversation"] = relationship(back_populates="projects")
@@ -71,6 +74,29 @@ class ResearchProject(Base):
     reports: Mapped[list["Report"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+    candidates: Mapped[list["ResearchCandidate"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ResearchCandidate(Base):
+    __tablename__ = "research_candidates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("research_projects.id", ondelete="CASCADE"))
+    candidate_key: Mapped[str] = mapped_column(index=True)
+    source_type: Mapped[str] = mapped_column(default="web")
+    title: Mapped[str] = mapped_column(default="")
+    url: Mapped[str] = mapped_column(Text)
+    description: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    license: Mapped[Optional[str]] = mapped_column(default=None)
+    version_or_branch: Mapped[Optional[str]] = mapped_column(default=None)
+    activity: Mapped[Optional[str]] = mapped_column(default=None)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
+    decision: Mapped[Optional[str]] = mapped_column(default=None)
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+    project: Mapped["ResearchProject"] = relationship(back_populates="candidates")
 
 
 class Plan(Base):
@@ -150,6 +176,7 @@ class Report(Base):
     version: Mapped[int] = mapped_column(default=1)
     format: Mapped[str] = mapped_column(default="md")
     content_md: Mapped[str] = mapped_column(Text, default="")
+    content_text: Mapped[Optional[str]] = mapped_column(Text, default=None)
     file_path: Mapped[Optional[str]] = mapped_column(default=None)
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
