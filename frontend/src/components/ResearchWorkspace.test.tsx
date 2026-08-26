@@ -110,6 +110,29 @@ describe("ResearchWorkspace", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Research in progress");
   });
 
+  it("locks the workflow mode after a conversation has started", () => {
+    render(
+      <ResearchWorkspace
+        conversation={{
+          id: 4,
+          title: "Search API evaluation",
+          status: "completed",
+          created_at: "",
+          updated_at: "",
+          messages: [{ id: 1, role: "user", content: "Compare API pricing", meta: null }],
+          projects: [],
+        }}
+        profileId={7}
+        runPhase="completed"
+        workflowMode="development_start"
+        onStart={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("group", { name: "工作流模式" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("工作流模式：项目/功能启动，已锁定")).toBeInTheDocument();
+  });
+
   it("re-enables research start after a completed run", () => {
     render(
       <ResearchWorkspace

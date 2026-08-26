@@ -111,6 +111,23 @@ def get_conversation(conversation_id: int, session: Session = Depends(get_db)):
                 "topic": p.topic,
                 "objective": p.objective,
                 "status": p.status,
+                "workflow_mode": p.workflow_mode,
+                "problem_definition": p.problem_definition_json,
+                "output_modes": p.output_modes_json or ["human"],
+                "candidates": [
+                    {
+                        "candidate_key": candidate.candidate_key,
+                        "source_type": candidate.source_type,
+                        "title": candidate.title,
+                        "url": candidate.url,
+                        "description": candidate.description,
+                        "license": candidate.license,
+                        "version_or_branch": candidate.version_or_branch,
+                        "activity": candidate.activity,
+                        "decision": candidate.decision,
+                    }
+                    for candidate in p.candidates
+                ],
                 "created_at": p.created_at.isoformat(),
                 "latest_report_id": latest_report.id if latest_report else None,
                 "latest_report_version": latest_report.version if latest_report else None,

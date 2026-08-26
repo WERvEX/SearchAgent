@@ -9,6 +9,7 @@ import type {
   ProjectExecutionDetail,
   ResearchFollowUpResponse,
   ResearchRunResponse,
+  ToolPolicy,
 } from "./types";
 
 export class ApiError extends Error {
@@ -57,7 +58,7 @@ export const api = {
     request<void>(`/conversations/${id}`, { method: "DELETE" }),
   listConversations: () => request<ConversationRead[]>("/conversations"),
   getConversation: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
-    startResearch: (payload: { conversation_id: number; profile_id: number; user_message: string; response_language: "en" | "zh-CN" }) =>
+    startResearch: (payload: { conversation_id: number; profile_id: number; user_message: string; response_language: "en" | "zh-CN"; workflow_mode?: "research" | "development_start" }) =>
     request<ResearchRunResponse>("/research/start", json("POST", payload)),
   getActiveResearch: (conversationId: number) =>
     request<ResearchRunResponse | null>(`/research/active/${conversationId}`),
@@ -73,6 +74,11 @@ export const api = {
   }) => request<ResearchFollowUpResponse>("/research/follow-up", json("POST", payload)),
   getProjectExecution: (projectId: number) =>
     request<ProjectExecutionDetail>(`/research/projects/${projectId}/execution`),
+  listToolPolicies: () => request<ToolPolicy[]>("/tool-policies"),
+  createToolPolicy: (payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => request<ToolPolicy>("/tool-policies", json("POST", payload)),
+  updateToolPolicy: (id: number, payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => request<ToolPolicy>(`/tool-policies/${id}`, json("PUT", payload)),
+  deleteToolPolicy: (id: number) => request<void>(`/tool-policies/${id}`, { method: "DELETE" }),
+  approveToolCall: (threadId: string, payload: { approved: boolean; profile_id?: number; agent_role: string; tool_name: string; args_fingerprint: string }) => request<ResearchRunResponse>(`/research/${encodeURIComponent(threadId)}/tool-approval`, json("POST", payload)),
   listLLMProfiles: () => request<LLMProfileRead[]>("/settings/llm-profiles"),
   createLLMProfile: (payload: LLMProfileCreate) =>
     request<LLMProfileRead>("/settings/llm-profiles", json("POST", payload)),
@@ -89,4 +95,5 @@ export const api = {
   getReport: (id: number) => request<ReportRead>(`/reports/${id}`),
   markdownDownloadUrl: (id: number) => `/api/reports/${id}/download.md`,
   pdfDownloadUrl: (id: number) => `/api/reports/${id}/download.pdf`,
+  jsonDownloadUrl: (id: number) => `/api/reports/${id}/download.json`,
 };

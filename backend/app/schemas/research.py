@@ -8,6 +8,7 @@ class ResearchStartRequest(BaseModel):
     profile_id: int = Field(gt=0)
     user_message: str = Field(min_length=1, max_length=10_000)
     response_language: Literal["en", "zh-CN"] = "zh-CN"
+    workflow_mode: Literal["research", "development_start"] = "research"
 
     @field_validator("user_message")
     @classmethod
@@ -26,13 +27,13 @@ class ResearchResumeRequest(BaseModel):
     @model_validator(mode="after")
     def validate_decision(self):
         kind = self.decision.get("kind")
-        if kind == "planning_message":
+        if kind in {"planning_message", "problem_message"}:
             message = self.decision.get("message")
             if not isinstance(message, str) or not message.strip():
                 raise ValueError("decision.message must be a non-empty string")
             self.decision["message"] = message.strip()
             return self
-        if kind == "planning_answers":
+        if kind in {"planning_answers", "problem_answers"}:
             answers = self.decision.get("answers")
             if not isinstance(answers, list) or not answers:
                 raise ValueError("decision.answers must be a non-empty list")
@@ -48,9 +49,22 @@ class ResearchResumeRequest(BaseModel):
                 if isinstance(text, str):
                     answer["text"] = text.strip()
             return self
+        if kind == "problem_confirm":
+            if not isinstance(self.decision.get("confirmed"), bool):
+                raise ValueError("decision.confirmed is required")
+            return self
+        if kind == "candidate_selection":
+            selections = self.decision.get("selections")
+            if not isinstance(selections, list):
+                raise ValueError("decision.selections must be a list")
+            return self
         if kind == "execute_plan":
             if not isinstance(self.decision.get("plan_version"), int):
                 raise ValueError("decision.plan_version is required when executing")
+            modes = self.decision.get("output_modes", ["human"])
+            if not isinstance(modes, list) or not modes or any(mode not in {"human", "ai"} for mode in modes):
+                raise ValueError("decision.output_modes must contain human and/or ai")
+            self.decision["output_modes"] = list(dict.fromkeys(modes))
             return self
         if kind == "clarification":
             answer = self.decision.get("answer")
@@ -61,7 +75,8 @@ class ResearchResumeRequest(BaseModel):
         if kind not in (None, "plan_approval"):
             raise ValueError(
                 "decision.kind must be planning_message, planning_answers, execute_plan, "
-                "clarification, or plan_approval"
+                "clarification, problem_message, problem_answers, problem_confirm, "
+                "candidate_selection, or plan_approval"
             )
         approved = self.decision.get("approved")
         if not isinstance(approved, bool):
@@ -75,6 +90,7 @@ class ResearchResumeRequest(BaseModel):
 
 class ResearchRunResponse(BaseModel):
     thread_id: str
+    trace_id: str | None = None
     state: dict[str, Any]
     interrupted: bool
     interrupt_payload: dict[str, Any] | None

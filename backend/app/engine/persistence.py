@@ -83,7 +83,14 @@ def sync_plan_and_steps(session: Session, state: dict) -> None:
     session.commit()
 
 
-def persist_report(session: Session, *, project_id: int, content_md: str) -> Report:
+def persist_report(
+    session: Session,
+    *,
+    project_id: int,
+    content_md: str = "",
+    content_text: str | None = None,
+    format: str = "md",
+) -> Report:
     version = (
         session.scalar(select(func.max(Report.version)).where(Report.project_id == project_id))
         or 0
@@ -91,8 +98,9 @@ def persist_report(session: Session, *, project_id: int, content_md: str) -> Rep
     report = Report(
         project_id=project_id,
         version=version,
-        format="md",
+        format=format,
         content_md=content_md,
+        content_text=content_text or content_md,
     )
     session.add(report)
     session.commit()

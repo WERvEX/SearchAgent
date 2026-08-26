@@ -12,6 +12,8 @@ from app.engine.checkpointer import create_checkpointer
 from app.engine.context import EngineContext
 from app.engine.graph import compile_research_graph
 from app.services.report_markdown import normalize_report_markdown
+from app.services.tracing_service import finish_trace, start_trace
+from app.tools.policy import ensure_default_policies
 
 
 def _config(thread_id: str) -> dict:
@@ -58,6 +60,7 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
     project.conversation.status = {
         "planning": "planning",
         "awaiting_execution": "awaiting_execution",
+        "awaiting_approval": "awaiting_approval",
         "executing": "executing",
         "revising_report": "revising_report",
         "done": "completed",
@@ -65,6 +68,12 @@ def _update_project_status(session: Session, state: dict, status: str) -> None:
     }.get(status, "running")
     if state.get("objective"):
         project.objective = state["objective"]
+    if state.get("workflow_mode"):
+        project.workflow_mode = state["workflow_mode"]
+    if state.get("problem_definition") is not None:
+        project.problem_definition_json = state["problem_definition"]
+    if state.get("output_modes"):
+        project.output_modes_json = state["output_modes"]
     session.commit()
 
 
@@ -157,13 +166,17 @@ def _record_message_once(
 
 
 def _waiting_status(payload: Optional[dict]) -> str:
-    if payload and payload.get("kind") in {"planning_input", "clarification"}:
+    if payload and payload.get("kind") == "tool_approval":
+        return "awaiting_approval"
+    if payload and payload.get("kind") in {"planning_input", "clarification", "problem_framing", "candidate_selection"}:
         return "planning"
     return "awaiting_execution"
 
 
 def _waiting_event(payload: dict) -> str:
-    if payload.get("kind") in {"planning_input", "clarification"}:
+    if payload.get("kind") == "tool_approval":
+        return "research.tool_approval_required"
+    if payload.get("kind") in {"planning_input", "clarification", "problem_framing", "candidate_selection"}:
         return "research.planning_message"
     return "research.plan_ready"
 
@@ -171,11 +184,14 @@ def _waiting_event(payload: dict) -> str:
 def _persist_waiting_message(
     session: Session, *, thread_id: str, state: dict, profile_id: int, payload: Optional[dict]
 ) -> None:
-    if not payload or payload.get("kind") not in {
+    if not payload or payload.get("kind") == "tool_approval" or payload.get("kind") not in {
         "planning_input",
         "plan_ready",
         "clarification",
         "plan_approval",
+        "tool_approval",
+        "problem_framing",
+        "candidate_selection",
     }:
         return
     question = str(payload.get("message") or "").strip()
@@ -211,14 +227,17 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
         decision = {**decision, "kind": "plan_approval"}
         actual_kind = "plan_approval"
     compatible = {
-        "planning_input": {"planning_message", "planning_answers", "clarification"},
+        "planning_input": {"planning_message", "planning_answers", "clarification", "problem_message", "problem_answers", "problem_confirm", "candidate_selection"},
+        "problem_framing": {"planning_message", "planning_answers", "problem_message", "problem_answers", "problem_confirm"},
+        "candidate_selection": {"candidate_selection", "planning_message"},
         "plan_ready": {"planning_message", "execute_plan", "plan_approval"},
         "clarification": {"clarification", "planning_message"},
         "plan_approval": {"plan_approval", "planning_message", "execute_plan"},
+        "tool_approval": {"tool_approval"},
     }
     if actual_kind not in compatible.get(expected_kind, {expected_kind}):
         raise ValueError(f"Expected a response for {expected_kind}")
-    if actual_kind == "planning_answers":
+    if actual_kind in {"planning_answers", "problem_answers"}:
         decision = {
             **decision,
             "message": _planning_answer_message(expected, decision.get("answers") or []),
@@ -248,6 +267,7 @@ async def start_research(
     profile_id: int,
     user_message: str,
     response_language: str = "zh-CN",
+    workflow_mode: str = "research",
     llm_factory: Optional[Callable[[], Any]] = None,
 ) -> dict:
     conversation = session.get(Conversation, conversation_id)
@@ -269,10 +289,14 @@ async def start_research(
         topic=user_message[:120],
         objective="",
         status="planning",
+        workflow_mode=workflow_mode,
+        output_modes_json=["human"],
     )
     session.add_all([message, project])
     session.commit()
     session.refresh(project)
+    ensure_default_policies(session)
+    trace_id = start_trace(session, project.id)
 
     thread_id = f"research-{project.id}-{uuid.uuid4().hex}"
     message.meta_json = _message_meta(
@@ -288,6 +312,7 @@ async def start_research(
 
     initial_state = {
         "run_id": thread_id,
+        "trace_id": trace_id,
         "conversation_id": conversation_id,
         "project_id": project.id,
         "response_language": response_language,
@@ -305,12 +330,23 @@ async def start_research(
         "findings": [],
         "report_md": None,
         "report_id": None,
+        "workflow_mode": workflow_mode,
+        "problem_definition": None,
+        "candidate_decisions": [],
+        "candidates": [],
+        "output_modes": ["human"],
+        "framing_round": 0,
+        "development_phase": "problem_framing" if workflow_mode == "development_start" else None,
+        "candidate_selection_done": False,
+        "agent_tasks": [],
+        "verified_findings": [],
     }
     _publish_lifecycle("research.started", thread_id=thread_id, state=initial_state)
     try:
         result = await asyncio.to_thread(graph.invoke, initial_state, config)
     except Exception as exc:
         _update_project_status(session, initial_state, "failed")
+        finish_trace(session, trace_id, "failed")
         message = str(exc) if str(exc).startswith("No usable sources") else "Research run failed."
         _publish_lifecycle(
             "research.failed",
@@ -333,6 +369,7 @@ async def start_research(
             interrupt_payload=payload,
         )
     else:
+        finish_trace(session, trace_id, "completed")
         _publish_lifecycle(
             "research.completed",
             thread_id=thread_id,
@@ -342,6 +379,7 @@ async def start_research(
 
     return {
         "thread_id": thread_id,
+        "trace_id": trace_id,
         "state": state,
         "interrupted": payload is not None,
         "interrupt_payload": payload,
@@ -392,6 +430,13 @@ async def resume_research(
                     } if decision["kind"] == "planning_answers" else None,
                 ),
             )
+    if decision["kind"] == "execute_plan":
+        modes = decision.get("output_modes") or ["human"]
+        state_before["output_modes"] = list(dict.fromkeys(modes))
+        project = session.get(ResearchProject, state_before.get("project_id"))
+        if project is not None:
+            project.output_modes_json = state_before["output_modes"]
+            session.commit()
     if decision["kind"] in {"execute_plan", "plan_approval"} and decision.get("approved", True):
         _update_project_status(session, state_before, "executing")
         _publish_lifecycle(
@@ -405,6 +450,8 @@ async def resume_research(
         result = await asyncio.to_thread(graph.invoke, Command(resume=decision), config)
     except Exception as exc:
         _update_project_status(session, state_before, "failed")
+        if state_before.get("trace_id"):
+            finish_trace(session, state_before["trace_id"], "failed")
         message = str(exc) if str(exc).startswith("No usable sources") else "Research run failed."
         _publish_lifecycle(
             "research.failed",
@@ -427,6 +474,8 @@ async def resume_research(
             interrupt_payload=payload,
         )
     else:
+        if state.get("trace_id"):
+            finish_trace(session, state["trace_id"], "completed")
         _publish_lifecycle(
             "research.completed",
             thread_id=thread_id,
@@ -436,6 +485,7 @@ async def resume_research(
 
     return {
         "thread_id": thread_id,
+        "trace_id": state.get("trace_id"),
         "state": state,
         "interrupted": payload is not None,
         "interrupt_payload": payload,

@@ -11,5 +11,6 @@ class ReportRead(BaseModel):
     version: int
     format: str
     content_md: str
+    content_text: str | None = None
     file_path: str | None
     created_at: datetime

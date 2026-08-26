@@ -35,6 +35,10 @@ export type ConversationDetail = ConversationRead & {
     topic: string;
     objective: string | null;
     status: string;
+    workflow_mode?: WorkflowMode;
+    problem_definition?: Record<string, unknown> | null;
+    candidates?: Array<Record<string, unknown>>;
+    output_modes?: string[];
     created_at: string;
     latest_report_id: number | null;
     latest_report_version: number | null;
@@ -80,10 +84,13 @@ export type PlanningAnswer = {
 
 export type ResearchRunResponse = {
   thread_id: string;
+  trace_id?: string | null;
   state: Record<string, unknown> & { report_id?: number };
   interrupted: boolean;
   interrupt_payload: Record<string, unknown> | null;
 };
+export type WorkflowMode = "research" | "development_start";
+export type OutputMode = "human" | "ai";
 
 export type ResearchRunPhase =
   | "idle"
@@ -148,6 +155,7 @@ export type ReportRead = {
   version: number;
   format: string;
   content_md: string;
+  content_text?: string | null;
   file_path: string | null;
   created_at: string;
 };
@@ -164,6 +172,9 @@ export type ProjectExecutionDetail = {
     tool_name: string;
   }>;
   reports: Array<{ id: number; version: number; created_at: string }>;
+  agent_tasks?: Array<{ id: number; role: string; title: string; status: string; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }>;
+  tool_calls?: Array<{ id: number; task_id?: number | null; agent_role: string; tool_name: string; status: string; result_summary?: string | null; error?: string | null }>;
+  approvals?: Array<{ id: number; agent_role: string; tool_name: string; decision: string; args_fingerprint: string }>;
 };
 
 export type ResearchFollowUpResponse = {
@@ -182,6 +193,8 @@ export const RESEARCH_LIFECYCLE_EVENT_TYPES = [
   "research.step_completed",
   "research.tool_started",
   "research.tool_completed",
+  "research.tool_denied",
+  "research.tool_approval_required",
   "research.source_collected",
   "research.report_revision_started",
   "research.report_revised",
@@ -195,6 +208,17 @@ export const RESEARCH_LIFECYCLE_EVENT_TYPES = [
 ] as const;
 
 export type ResearchLifecycleEventType = (typeof RESEARCH_LIFECYCLE_EVENT_TYPES)[number];
+
+export type ToolPolicy = {
+  id: number;
+  version: number;
+  agent_role: string;
+  tool_name: string;
+  allowed_domains: string[];
+  require_approval: boolean;
+  enabled: boolean;
+  created_at: string;
+};
 
 export type ResearchLifecyclePayload = Record<string, unknown> & {
   thread_id: string;
