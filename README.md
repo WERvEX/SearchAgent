@@ -1,6 +1,6 @@
-# SearchAgent
+# StartSpec
 
-SearchAgent 是一个面向开发者的 AI 开发启动工作台，帮助你把“想做一个新项目或新功能”推进到可以执行的实施计划。它采用类似 vibe coding 和 Codex Plan Mode 的多轮对话流程，先梳理问题和约束，再搜索可复用的开源项目、服务、官方文档与技术资料，最后给出经过验证的实现路径。
+StartSpec 是一个面向开发者的 AI 开发启动工作台，帮助你把“想做一个新项目或新功能”推进到可以执行的实施计划。它采用类似 vibe coding 和 Codex Plan Mode 的多轮对话流程，先梳理问题和约束，再搜索可复用的开源项目、服务、官方文档与技术资料，最后给出经过验证的实现路径。
 
 系统提供两个入口：默认的“通用研究”用于规划、检索、核验和写作；“项目/功能启动”则围绕目标、用户场景、成功标准和待验证假设展开问题梳理，比较候选方案，并让用户明确选择哪些内容仅作参考、哪些内容纳入实施计划。计划确认后，可以生成面向开发者阅读的 Markdown、面向后续 AI 消费的紧凑 JSON，或同时生成两者。
 
@@ -167,13 +167,13 @@ npm run dev
 | 参数 | `-y` 和 `@humansean/mcp-bocha`，每行一个 |
 | 环境变量 | `BOCHA_API_KEY=你的密钥` |
 
-SearchAgent 会识别名为 `bocha` 的配置，并使用保存的密钥调用内置 Bocha 搜索适配器。其他工具可以按其文档配置为 stdio 命令或远程 HTTP MCP 服务。
+StartSpec 会识别名为 `bocha` 的配置，并使用保存的密钥调用内置 Bocha 搜索适配器。其他工具可以按其文档配置为 stdio 命令或远程 HTTP MCP 服务。
 
 不配置搜索服务时，系统仍可抓取模型已经知道的网页地址，但无法可靠完成开放式网络搜索。
 
 ## 本地数据与安全
 
-默认数据目录为用户主目录下的 `.searchagent`：
+为兼容已有安装，默认数据目录和环境变量暂时沿用 `.searchagent` 与 `SEARCHAGENT_HOME`：
 
 ```text
 ~/.searchagent/
@@ -228,7 +228,7 @@ npm run build
 ## 项目结构
 
 ```text
-SearchAgent/
+StartSpec/
 ├── backend/
 │   ├── app/
 │   │   ├── api/       # REST、SSE、研究恢复和报告接口

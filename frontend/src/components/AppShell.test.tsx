@@ -19,7 +19,7 @@ describe("AppShell", () => {
       />,
     );
 
-    expect(screen.getByRole("banner")).toHaveTextContent("SearchAgent");
+    expect(screen.getByRole("banner")).toHaveTextContent("StartSpec");
     expect(screen.getByText("History list")).toBeInTheDocument();
     expect(screen.getByText("Research workspace")).toBeInTheDocument();
     expect(screen.getByText("Event stream")).toBeInTheDocument();

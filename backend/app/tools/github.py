@@ -9,7 +9,7 @@ GITHUB_API = "https://api.github.com"
 
 
 def _headers(token: str | None) -> dict[str, str]:
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "SearchAgent"}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "StartSpec"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers

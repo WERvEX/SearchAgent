@@ -1,7 +1,7 @@
 [project]
-name = "searchagent-backend"
+name = "startspec-backend"
 version = "0.1.0"
-description = "Local LangChain + MCP research agent backend"
+description = "Local AI development discovery and implementation planning backend"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1.0",

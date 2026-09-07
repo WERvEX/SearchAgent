@@ -48,7 +48,7 @@ def download_json(report_id: int, session: Session = Depends(get_db)):
     return Response(
         content=content,
         media_type="application/json; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="searchagent-report-{report.id}.json"'},
+        headers={"Content-Disposition": f'attachment; filename="startspec-report-{report.id}.json"'},
     )
 
 

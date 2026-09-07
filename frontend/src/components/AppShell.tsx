@@ -55,7 +55,7 @@ export function AppShell({
             <PanelLeft className="h-4 w-4" aria-hidden="true" />
           </button>
           <Telescope className="h-5 w-5 text-teal-700" aria-hidden="true" />
-          <span>SearchAgent</span>
+          <span>StartSpec</span>
         </div>
         <nav className="flex w-full flex-wrap items-center gap-1 sm:w-auto xl:w-auto xl:flex-nowrap" aria-label={t("shell.primaryNavigation")}>
           <button

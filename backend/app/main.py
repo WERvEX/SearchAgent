@@ -6,7 +6,7 @@ from app.db.session import init_db
 
 def create_app() -> FastAPI:
     init_db()
-    app = FastAPI(title="SearchAgent", version="0.1.0")
+    app = FastAPI(title="StartSpec", version="0.1.0")
     app.include_router(api_router)
     return app
 
