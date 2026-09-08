@@ -99,8 +99,26 @@ def record_approval(session: Session, *, project_id: int, trace_id: str, agent_r
 
 def ensure_default_policies(session: Session) -> None:
     """Install conservative built-in read-only rules once for existing projects."""
-    existing = {(item.agent_role, item.tool_name) for item in session.query(ToolPolicy).all()}
-    for role, tool_name in (("retriever", "fetch_page"), ("retriever", "search_web"), ("verifier", "fetch_page")):
+    # Preserve user-authored v1 retriever policies when moving to the simpler researcher role.
+    legacy_rows = session.query(ToolPolicy).filter(ToolPolicy.agent_role == "retriever").order_by(ToolPolicy.id).all()
+    researcher_tools = {row.tool_name for row in session.query(ToolPolicy).filter(ToolPolicy.agent_role == "researcher").all()}
+    for row in legacy_rows:
+        if row.tool_name not in researcher_tools:
+            session.add(ToolPolicy(
+                version=policy_version(session) + 1, agent_role="researcher", tool_name=row.tool_name,
+                allowed_domains_json=list(row.allowed_domains_json or []), require_approval=row.require_approval,
+                enabled=row.enabled,
+            ))
+            researcher_tools.add(row.tool_name)
+    session.flush()
+    existing = {(row.agent_role, row.tool_name) for row in session.query(ToolPolicy).all()}
+    for role, tool_name in (
+        ("researcher", "fetch_page"), ("researcher", "search_web"),
+        ("researcher", "bocha_web_search"), ("researcher", "github_repository_search"),
+        ("researcher", "official_documentation_fetch"),
+        # Retain legacy defaults for old checkpoints that still resume as retriever.
+        ("retriever", "fetch_page"), ("retriever", "search_web"), ("verifier", "fetch_page"),
+    ):
         if (role, tool_name) not in existing:
             session.add(ToolPolicy(version=1, agent_role=role, tool_name=tool_name, allowed_domains_json=[], require_approval=False, enabled=True))
     session.commit()

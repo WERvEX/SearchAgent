@@ -57,10 +57,16 @@ def _apply_additive_sqlite_schema(db_engine: Engine) -> None:
             "workflow_mode": "ALTER TABLE research_projects ADD COLUMN workflow_mode VARCHAR DEFAULT 'research'",
             "problem_definition_json": "ALTER TABLE research_projects ADD COLUMN problem_definition_json JSON",
             "output_modes_json": "ALTER TABLE research_projects ADD COLUMN output_modes_json JSON",
+            "repository_mode": "ALTER TABLE research_projects ADD COLUMN repository_mode VARCHAR DEFAULT 'none'",
+            "repository_snapshot_id": "ALTER TABLE research_projects ADD COLUMN repository_snapshot_id INTEGER",
         }.items():
             if name not in project_columns:
                 connection.execute(text(ddl))
         connection.execute(text("UPDATE research_projects SET workflow_mode = 'research' WHERE workflow_mode IS NULL"))
+        connection.execute(text("UPDATE research_projects SET repository_mode = 'none' WHERE repository_mode IS NULL"))
         report_columns = {item["name"] for item in inspector.get_columns("reports")}
         if "content_text" not in report_columns:
             connection.execute(text("ALTER TABLE reports ADD COLUMN content_text TEXT"))
+        plan_columns = {item["name"] for item in inspector.get_columns("plans")}
+        if "plan_json" not in plan_columns:
+            connection.execute(text("ALTER TABLE plans ADD COLUMN plan_json JSON"))

@@ -48,6 +48,26 @@ def test_compile_graph_has_interrupt_after_plan(session):
     assert hasattr(graph, "invoke")
 
 
+def test_evidence_gate_route_allows_at_most_one_supplemental_round():
+    from app.engine.graph import _route_after_evidence_gate
+
+    assert _route_after_evidence_gate({
+        "research_round": 1,
+        "allow_supplemental_research": True,
+        "evidence_gate": {"needs_supplement": True},
+    }) == "execute_research"
+    assert _route_after_evidence_gate({
+        "research_round": 2,
+        "allow_supplemental_research": True,
+        "evidence_gate": {"needs_supplement": True},
+    }) == "write_report"
+    assert _route_after_evidence_gate({
+        "research_round": 1,
+        "allow_supplemental_research": False,
+        "evidence_gate": {"needs_supplement": True},
+    }) == "write_report"
+
+
 def test_graph_pauses_at_plan_interrupt(session, monkeypatch):
     from app.db.models import Conversation, ResearchProject
     from app.engine.graph import compile_research_graph

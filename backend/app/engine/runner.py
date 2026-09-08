@@ -168,7 +168,7 @@ def _record_message_once(
 def _waiting_status(payload: Optional[dict]) -> str:
     if payload and payload.get("kind") == "tool_approval":
         return "awaiting_approval"
-    if payload and payload.get("kind") in {"planning_input", "clarification", "problem_framing", "candidate_selection"}:
+    if payload and payload.get("kind") in {"planning_input", "clarification", "problem_framing", "repository_selection", "repository_review", "candidate_selection"}:
         return "planning"
     return "awaiting_execution"
 
@@ -176,7 +176,7 @@ def _waiting_status(payload: Optional[dict]) -> str:
 def _waiting_event(payload: dict) -> str:
     if payload.get("kind") == "tool_approval":
         return "research.tool_approval_required"
-    if payload.get("kind") in {"planning_input", "clarification", "problem_framing", "candidate_selection"}:
+    if payload.get("kind") in {"planning_input", "clarification", "problem_framing", "repository_selection", "repository_review", "candidate_selection"}:
         return "research.planning_message"
     return "research.plan_ready"
 
@@ -191,6 +191,8 @@ def _persist_waiting_message(
         "plan_approval",
         "tool_approval",
         "problem_framing",
+        "repository_selection",
+        "repository_review",
         "candidate_selection",
     }:
         return
@@ -229,6 +231,8 @@ def _validate_resume_payload(expected: Optional[dict], decision: dict) -> dict:
     compatible = {
         "planning_input": {"planning_message", "planning_answers", "clarification", "problem_message", "problem_answers", "problem_confirm", "candidate_selection"},
         "problem_framing": {"planning_message", "planning_answers", "problem_message", "problem_answers", "problem_confirm"},
+        "repository_selection": {"repository_selection"},
+        "repository_review": {"repository_review"},
         "candidate_selection": {"candidate_selection", "planning_message"},
         "plan_ready": {"planning_message", "execute_plan", "plan_approval"},
         "clarification": {"clarification", "planning_message"},
@@ -338,6 +342,17 @@ async def start_research(
         "framing_round": 0,
         "development_phase": "problem_framing" if workflow_mode == "development_start" else None,
         "candidate_selection_done": False,
+        "repository_mode": "pending" if workflow_mode == "development_start" else "none",
+        "repository_path": None,
+        "repository_snapshot_id": None,
+        "repository_summary": None,
+        "repository_selection_done": workflow_mode != "development_start",
+        "repository_confirmed": workflow_mode != "development_start",
+        "change_map": [],
+        "artifact_ids": [],
+        "research_round": 0,
+        "evidence_gate": None,
+        "allow_supplemental_research": True,
         "agent_tasks": [],
         "verified_findings": [],
     }

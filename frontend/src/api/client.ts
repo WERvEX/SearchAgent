@@ -10,6 +10,7 @@ import type {
   ResearchFollowUpResponse,
   ResearchRunResponse,
   ToolPolicy,
+  ProjectArtifactRead,
 } from "./types";
 
 export class ApiError extends Error {
@@ -74,6 +75,8 @@ export const api = {
   }) => request<ResearchFollowUpResponse>("/research/follow-up", json("POST", payload)),
   getProjectExecution: (projectId: number) =>
     request<ProjectExecutionDetail>(`/research/projects/${projectId}/execution`),
+  getArtifact: (artifactId: number) => request<ProjectArtifactRead>(`/artifacts/${artifactId}`),
+  artifactDownloadUrl: (artifactId: number) => `/api/artifacts/${artifactId}/download`,
   listToolPolicies: () => request<ToolPolicy[]>("/tool-policies"),
   createToolPolicy: (payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => request<ToolPolicy>("/tool-policies", json("POST", payload)),
   updateToolPolicy: (id: number, payload: Omit<ToolPolicy, "id" | "version" | "created_at">) => request<ToolPolicy>(`/tool-policies/${id}`, json("PUT", payload)),

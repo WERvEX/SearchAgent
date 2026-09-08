@@ -399,14 +399,10 @@ def test_aggregate_evidence_deduplicates_findings_and_marks_criteria(session):
         }
     )
 
-    assert out["findings"] == [
-        {
-            "title": "Market report",
-            "url": "https://example.com/report",
-            "snippet": "market data for renewable energy",
-            "tool_name": "search_web",
-        }
-    ]
+    assert len(out["findings"]) == 1
+    assert out["findings"][0]["title"] == "Market report"
+    assert out["findings"][0]["verification_status"] == "supported"
+    assert out["evidence_gate"]["status"] == "passed"
     assert out["steps"][0]["acceptance_criteria"] == [
         {
             "description": "market data",
@@ -414,6 +410,45 @@ def test_aggregate_evidence_deduplicates_findings_and_marks_criteria(session):
             "evidence_ref": "https://example.com/report",
         }
     ]
+
+
+def test_evidence_gate_requests_only_one_supplement_for_uncovered_search_tasks(session):
+    from app.engine.context import EngineContext
+    from app.engine.nodes import make_nodes
+
+    nodes = make_nodes(EngineContext(session=session, profile_id=1, llm_factory=lambda: _FakeLLM()))
+    state = {
+        "conversation_id": 1,
+        "project_id": 1,
+        "messages": [],
+        "objective": "Compare two implementation choices",
+        "plan": {
+            "search_tasks": [
+                {"title": "Primary documentation", "query": "official docs"},
+                {"title": "Compatibility evidence", "query": "compatibility"},
+            ]
+        },
+        "approved": True,
+        "steps": [],
+        "findings": [{
+            "title": "Official docs",
+            "url": "https://example.com/docs",
+            "snippet": "Supported API behavior",
+            "tool_name": "search_web",
+            "research_task_id": "research_01",
+        }],
+        "research_round": 1,
+        "allow_supplemental_research": True,
+    }
+
+    first = nodes["aggregate_evidence"](state)
+    assert first["evidence_gate"]["status"] == "needs_supplement"
+    assert first["evidence_gate"]["needs_supplement"] is True
+    assert "research_02" in first["evidence_gate"]["issues"][0]
+
+    final = nodes["aggregate_evidence"]({**state, "research_round": 2})
+    assert final["evidence_gate"]["status"] == "partial"
+    assert final["evidence_gate"]["needs_supplement"] is False
 
 
 def test_write_report_generates_cited_markdown_persists_report_and_publishes_event(session, monkeypatch):
@@ -544,6 +579,36 @@ def test_normalize_report_analysis_accepts_plain_numbered_citations():
 
     assert normalized is not None
     assert "[^1]" in normalized
+
+
+def test_report_synthesis_uses_only_one_model_call(session):
+    from app.engine.context import EngineContext
+    from app.engine.nodes import _synthesize_report
+
+    class _InvalidReportLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _prompt):
+            self.calls += 1
+            return type("_R", (), {"content": "too short"})()
+
+    llm = _InvalidReportLLM()
+    result = _synthesize_report(
+        EngineContext(session=session, profile_id=1, llm_factory=lambda: llm),
+        {
+            "objective": "Assess an implementation",
+            "plan": {"summary": "plan"},
+            "findings": [{
+                "title": "Source",
+                "url": "https://example.com",
+                "snippet": "Evidence",
+            }],
+        },
+    )
+
+    assert result is None
+    assert llm.calls == 1
 
 
 def test_planning_questions_are_normalized_to_three_single_choice_prompts():

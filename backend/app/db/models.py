@@ -56,6 +56,10 @@ class ResearchProject(Base):
     workflow_mode: Mapped[str] = mapped_column(default="research")
     problem_definition_json: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
     output_modes_json: Mapped[Optional[list]] = mapped_column(JSON, default=None)
+    repository_mode: Mapped[str] = mapped_column(default="none")
+    repository_snapshot_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="SET NULL"), default=None
+    )
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
     conversation: Mapped["Conversation"] = relationship(back_populates="projects")
@@ -76,6 +80,29 @@ class ResearchProject(Base):
     )
     candidates: Mapped[list["ResearchCandidate"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
+    )
+    snapshots: Mapped[list["RepositorySnapshot"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan",
+        foreign_keys="RepositorySnapshot.project_id",
+    )
+    artifacts: Mapped[list["ProjectArtifact"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class RepositorySnapshot(Base):
+    __tablename__ = "repository_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("research_projects.id", ondelete="CASCADE"), index=True)
+    repository_path: Mapped[str] = mapped_column(Text)
+    fingerprint: Mapped[str] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(default="complete")
+    snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+    project: Mapped["ResearchProject"] = relationship(
+        back_populates="snapshots", foreign_keys=[project_id]
     )
 
 
@@ -110,6 +137,7 @@ class Plan(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     options_json: Mapped[Optional[list]] = mapped_column(JSON, default=None)
     chosen_option: Mapped[Optional[str]] = mapped_column(default=None)
+    plan_json: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
     project: Mapped["ResearchProject"] = relationship(back_populates="plans")
@@ -181,6 +209,22 @@ class Report(Base):
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
     project: Mapped["ResearchProject"] = relationship(back_populates="reports")
+
+
+class ProjectArtifact(Base):
+    __tablename__ = "project_artifacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("research_projects.id", ondelete="CASCADE"), index=True)
+    plan_version: Mapped[int] = mapped_column(default=1)
+    artifact_kind: Mapped[str] = mapped_column(default="implementation_manifest")
+    schema_version: Mapped[str] = mapped_column(default="1.0")
+    format: Mapped[str] = mapped_column(default="json")
+    content_text: Mapped[str] = mapped_column(Text)
+    file_path: Mapped[Optional[str]] = mapped_column(default=None)
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+    project: Mapped["ResearchProject"] = relationship(back_populates="artifacts")
 
 
 class LLMProfile(Base):

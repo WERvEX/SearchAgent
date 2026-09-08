@@ -114,6 +114,8 @@ def get_conversation(conversation_id: int, session: Session = Depends(get_db)):
                 "workflow_mode": p.workflow_mode,
                 "problem_definition": p.problem_definition_json,
                 "output_modes": p.output_modes_json or ["human"],
+                "repository_mode": p.repository_mode,
+                "repository_snapshot_id": p.repository_snapshot_id,
                 "candidates": [
                     {
                         "candidate_key": candidate.candidate_key,
@@ -138,6 +140,13 @@ def get_conversation(conversation_id: int, session: Session = Depends(get_db)):
                         "version": plan.version,
                         "summary": plan.summary,
                         "steps": plan.options_json or [],
+                        "search_tasks": (plan.plan_json or {}).get("search_tasks", []),
+                        "verification_tasks": (plan.plan_json or {}).get("verification_tasks", []),
+                        "risks": (plan.plan_json or {}).get("risks", []),
+                        "change_map": (plan.plan_json or {}).get("change_map", []),
+                        "unresolved_decisions": (plan.plan_json or {}).get("unresolved_decisions", []),
+                        "repository_snapshot_id": (plan.plan_json or {}).get("repository_snapshot_id"),
+                        "repository_fingerprint": (plan.plan_json or {}).get("repository_fingerprint"),
                         "created_at": plan.created_at.isoformat(),
                     }
                     for plan in sorted(p.plans, key=lambda item: (item.version, item.id))
@@ -150,6 +159,17 @@ def get_conversation(conversation_id: int, session: Session = Depends(get_db)):
                         "created_at": report.created_at.isoformat(),
                     }
                     for report in sorted(p.reports, key=lambda item: (item.version, item.id))
+                ],
+                "artifacts": [
+                    {
+                        "id": artifact.id,
+                        "project_id": p.id,
+                        "plan_version": artifact.plan_version,
+                        "artifact_kind": artifact.artifact_kind,
+                        "format": artifact.format,
+                        "created_at": artifact.created_at.isoformat(),
+                    }
+                    for artifact in sorted(p.artifacts, key=lambda item: item.id)
                 ],
             }
             for p in conv.projects

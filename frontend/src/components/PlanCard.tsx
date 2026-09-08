@@ -42,6 +42,8 @@ export function PlanCard({
           </li>
         ))}
       </ol>
+      {plan.change_map?.length ? <div className="mt-5 border-t border-zinc-200 pt-4"><h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Change Map</h4><ul className="mt-2 space-y-2">{plan.change_map.map((change, index) => <li key={String(change.id ?? index)} className="rounded-md bg-zinc-50 px-3 py-2 text-xs text-zinc-700"><span className="font-semibold text-zinc-900">{String(change.action ?? "modify")}</span> <code>{String(change.path ?? "待确认")}</code><span className="ml-2 text-zinc-500">{String(change.purpose ?? "")}</span></li>)}</ul></div> : null}
+      {plan.verification_tasks?.length ? <div className="mt-4"><h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">验证任务</h4><ul className="mt-2 list-inside list-disc text-xs leading-6 text-zinc-700">{plan.verification_tasks.map((task, index) => <li key={index}>{typeof task === "string" ? task : String(task.title ?? task.description ?? JSON.stringify(task))}</li>)}</ul></div> : null}
       {current ? (
         <div className="mt-5 flex items-center justify-between gap-3 border-t border-zinc-200 pt-4">
           <span className="text-xs text-zinc-500">{t("plan.continueToRevise")}</span>

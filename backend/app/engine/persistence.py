@@ -1,7 +1,7 @@
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import AcceptanceCriterion, Plan, Report, Step
+from app.db.models import AcceptanceCriterion, Plan, ProjectArtifact, Report, Step
 
 
 def persist_plan_version(session: Session, state: dict) -> int:
@@ -18,6 +18,7 @@ def persist_plan_version(session: Session, state: dict) -> int:
             summary=str(plan.get("summary", "")),
             options_json=state.get("steps") or plan.get("steps") or plan.get("options") or [],
             chosen_option=None,
+            plan_json=plan,
         )
     )
     session.commit()
@@ -44,6 +45,7 @@ def sync_plan_and_steps(session: Session, state: dict) -> None:
                 summary=str(plan.get("summary", "")),
                 options_json=state.get("steps") or plan.get("steps") or plan.get("options"),
                 chosen_option=plan.get("chosen_option"),
+                plan_json=plan,
             )
         )
 
@@ -106,3 +108,25 @@ def persist_report(
     session.commit()
     session.refresh(report)
     return report
+
+
+def persist_artifact(
+    session: Session,
+    *,
+    project_id: int,
+    plan_version: int,
+    format: str,
+    content_text: str,
+) -> ProjectArtifact:
+    artifact = ProjectArtifact(
+        project_id=project_id,
+        plan_version=plan_version,
+        artifact_kind="implementation_manifest" if format == "json" else "startspec_spec",
+        schema_version="1.0",
+        format=format,
+        content_text=content_text,
+    )
+    session.add(artifact)
+    session.commit()
+    session.refresh(artifact)
+    return artifact

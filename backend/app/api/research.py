@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.db.models import AgentTask, Conversation, LLMProfile, ResearchProject, Source, Step, ToolApproval, ToolCall
+from app.db.models import AgentTask, Conversation, LLMProfile, Message, RepositorySnapshot, ResearchProject, Source, Step, ToolApproval, ToolCall
 from app.engine import runner
 from app.schemas.research import (
     ResearchResumeRequest,
@@ -49,6 +49,35 @@ async def resume_research_endpoint(
         thread_id=thread_id,
         decision=payload.decision,
         profile_id=payload.profile_id,
+        response_language=payload.response_language,
+    )
+
+
+def _project_id_for_thread(session: Session, thread_id: str) -> int | None:
+    for message in session.query(Message).order_by(Message.id.desc()):
+        meta = message.meta_json or {}
+        if meta.get("research_thread_id") == thread_id and isinstance(meta.get("research_project_id"), int):
+            return meta["research_project_id"]
+    return None
+
+
+@router.get("/{thread_id}/repository-snapshot")
+def repository_snapshot(thread_id: str, session: Session = Depends(get_db)):
+    project_id = _project_id_for_thread(session, thread_id)
+    project = session.get(ResearchProject, project_id) if project_id else None
+    snapshot = session.get(RepositorySnapshot, project.repository_snapshot_id) if project and project.repository_snapshot_id else None
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Repository snapshot not found")
+    result = dict(snapshot.snapshot_json or {})
+    result["snapshot_id"] = snapshot.id
+    return result
+
+
+@router.post("/{thread_id}/repository/rescan", response_model=ResearchRunResponse)
+async def rescan_repository(thread_id: str, payload: ResearchResumeRequest, session: Session = Depends(get_db)):
+    decision = {**payload.decision, "kind": "repository_review", "confirmed": False}
+    return await runner.resume_research(
+        session, thread_id=thread_id, decision=decision, profile_id=payload.profile_id,
         response_language=payload.response_language,
     )
 
@@ -120,6 +149,11 @@ def project_execution_detail(
                 "created_at": report.created_at.isoformat(),
             }
             for report in sorted(project.reports, key=lambda item: (item.version, item.id))
+        ],
+        "artifacts": [
+            {"id": artifact.id, "plan_version": artifact.plan_version, "artifact_kind": artifact.artifact_kind,
+             "format": artifact.format, "created_at": artifact.created_at.isoformat()}
+            for artifact in sorted(project.artifacts, key=lambda item: item.id)
         ],
         "agent_tasks": [
             {"id": task.id, "role": task.role, "title": task.title, "status": task.status,

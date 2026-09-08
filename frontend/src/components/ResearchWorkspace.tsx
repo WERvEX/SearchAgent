@@ -4,7 +4,7 @@ import type { ConversationDetail, PlanArtifact, PlanningAnswer, PlanningQuestion
 import { useI18n } from "../i18n/I18nProvider";
 import { PlanCard } from "./PlanCard";
 import { PlanningQuestionCard } from "./PlanningQuestionCard";
-import { CandidateDecisionCard, OutputModeCard, ProblemDefinitionCard, type DevelopmentPrompt } from "./DevelopmentStartCards";
+import { CandidateDecisionCard, OutputModeCard, ProblemDefinitionCard, RepositoryAnalysisCard, RepositoryContextCard, type DevelopmentPrompt } from "./DevelopmentStartCards";
 
 type ResearchWorkspaceProps = {
   conversation: ConversationDetail | null;
@@ -36,6 +36,8 @@ type ResearchWorkspaceProps = {
   workflowModeLocked?: boolean;
   developmentPrompt?: DevelopmentPrompt | null;
   onProblemConfirm?: (confirmed: boolean, feedback?: string) => void;
+  onRepositorySelection?: (path: string | null, excludePatterns?: string[]) => void;
+  onRepositoryReview?: (confirmed: boolean, excludePatterns?: string[]) => void;
   onCandidateSelection?: (selections: Array<{ candidate_key: string; decision: "reference" | "adopt" }>) => void;
   onOutputModes?: (modes: Array<"human" | "ai">) => void;
 };
@@ -70,6 +72,8 @@ export function ResearchWorkspace({
   workflowModeLocked,
   developmentPrompt = null,
   onProblemConfirm,
+  onRepositorySelection,
+  onRepositoryReview,
   onCandidateSelection,
   onOutputModes,
 }: ResearchWorkspaceProps) {
@@ -318,6 +322,8 @@ export function ResearchWorkspace({
           />
         ) : null}
         {developmentPrompt?.phase === "problem_framing" && developmentPrompt.problem_definition ? <ProblemDefinitionCard problem={developmentPrompt.problem_definition} onConfirm={onProblemConfirm} onContinue={(message) => onProblemConfirm?.(false, message)} /> : null}
+        {developmentPrompt?.phase === "repository_selection" ? <RepositoryContextCard pending={runPhase === "resuming"} onSubmit={onRepositorySelection} /> : null}
+        {developmentPrompt?.phase === "repository_review" && developmentPrompt.repository_snapshot ? <RepositoryAnalysisCard snapshot={developmentPrompt.repository_snapshot} pending={runPhase === "resuming"} onReview={onRepositoryReview} /> : null}
         {developmentPrompt?.phase === "candidate_selection" ? <CandidateDecisionCard candidates={developmentPrompt.candidates ?? []} onSubmit={onCandidateSelection} /> : null}
         {developmentPrompt?.phase === "plan_ready" ? <OutputModeCard pending={runPhase === "resuming" || runPhase === "executing"} onSubmit={onOutputModes} /> : null}
         </div>

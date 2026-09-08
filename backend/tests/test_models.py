@@ -30,6 +30,8 @@ def test_all_tables_created(session):
         "llm_profiles",
         "mcp_servers",
         "app_preferences",
+        "repository_snapshots",
+        "project_artifacts",
     }
     assert expected.issubset(tables)
 

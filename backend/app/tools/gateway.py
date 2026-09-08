@@ -23,6 +23,7 @@ def execute_tool(
     tool: Any,
     invoke: Callable[[Any, dict], Any],
     publish: Callable[..., None],
+    task_id: int | None = None,
 ) -> Any:
     decision = decide(session, project_id=project_id, trace_id=trace_id, agent_role=agent_role, tool_name=tool_name, args=args)
     if decision.action == "deny":
@@ -45,7 +46,7 @@ def execute_tool(
             publish("research.tool_denied", tool_name=tool_name, agent_role=agent_role, reason="User denied the tool request.")
             raise PermissionError("User denied the tool request")
     span_id = start_span(session, trace_id, f"tool:{tool_name}", kind="tool", attributes={"agent_role": agent_role, "tool_name": tool_name}, input_value=args)
-    call = ToolCall(project_id=project_id, trace_id=trace_id, agent_role=agent_role, tool_name=tool_name, args_json={key: value for key, value in args.items() if key not in {"api_key", "token", "password", "secret"}})
+    call = ToolCall(project_id=project_id, trace_id=trace_id, task_id=task_id, agent_role=agent_role, tool_name=tool_name, args_json={key: value for key, value in args.items() if key not in {"api_key", "token", "password", "secret"}})
     session.add(call)
     session.commit()
     publish("research.tool_started", tool_name=tool_name, agent_role=agent_role)

@@ -53,6 +53,24 @@ class ResearchResumeRequest(BaseModel):
             if not isinstance(self.decision.get("confirmed"), bool):
                 raise ValueError("decision.confirmed is required")
             return self
+        if kind == "repository_selection":
+            skip = self.decision.get("skip") is True
+            path = self.decision.get("repository_path")
+            if not skip and (not isinstance(path, str) or not path.strip()):
+                raise ValueError("decision.repository_path is required unless skipped")
+            if isinstance(path, str):
+                self.decision["repository_path"] = path.strip()
+            patterns = self.decision.get("exclude_patterns", [])
+            if not isinstance(patterns, list) or any(not isinstance(item, str) for item in patterns):
+                raise ValueError("decision.exclude_patterns must be a list of strings")
+            return self
+        if kind == "repository_review":
+            if not isinstance(self.decision.get("confirmed"), bool):
+                raise ValueError("decision.confirmed is required")
+            patterns = self.decision.get("exclude_patterns", [])
+            if not isinstance(patterns, list) or any(not isinstance(item, str) for item in patterns):
+                raise ValueError("decision.exclude_patterns must be a list of strings")
+            return self
         if kind == "candidate_selection":
             selections = self.decision.get("selections")
             if not isinstance(selections, list):
@@ -76,7 +94,7 @@ class ResearchResumeRequest(BaseModel):
             raise ValueError(
                 "decision.kind must be planning_message, planning_answers, execute_plan, "
                 "clarification, problem_message, problem_answers, problem_confirm, "
-                "candidate_selection, or plan_approval"
+                "repository_selection, repository_review, candidate_selection, or plan_approval"
             )
         approved = self.decision.get("approved")
         if not isinstance(approved, bool):

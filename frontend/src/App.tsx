@@ -21,6 +21,7 @@ import { AppPanel, AppShell } from "./components/AppShell";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ExecutionDrawer } from "./components/ExecutionDrawer";
 import { ReportPanel } from "./components/ReportPanel";
+import { ArtifactPanel } from "./components/ArtifactPanel";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { SettingsPanel, type SettingsLoadErrors } from "./components/SettingsPanel";
 import { useEventStream } from "./hooks/useEventStream";
@@ -44,7 +45,7 @@ function createPlaceholderRun(threadId: string): ResearchRunResponse {
 
 function deriveRunPhaseFromResponse(run: ResearchRunResponse): ResearchRunPhase {
   const kind = run.interrupt_payload?.kind;
-  if (run.interrupted && (kind === "planning_input" || kind === "clarification" || kind === "problem_framing" || kind === "candidate_selection")) {
+  if (run.interrupted && (kind === "planning_input" || kind === "clarification" || kind === "problem_framing" || kind === "repository_selection" || kind === "repository_review" || kind === "candidate_selection")) {
     return "planning";
   }
   if (run.interrupted && (kind === "plan_ready" || kind === "plan_approval")) {
@@ -695,6 +696,16 @@ export default function App() {
     void resumeDevelopment({ kind: "candidate_selection", selections });
   }
 
+  function handleRepositorySelection(path: string | null, excludePatterns: string[] = []) {
+    void resumeDevelopment(path
+      ? { kind: "repository_selection", repository_path: path, exclude_patterns: excludePatterns }
+      : { kind: "repository_selection", skip: true });
+  }
+
+  function handleRepositoryReview(confirmed: boolean, excludePatterns: string[] = []) {
+    void resumeDevelopment({ kind: "repository_review", confirmed, exclude_patterns: excludePatterns });
+  }
+
   function handleOutputModes(modes: Array<"human" | "ai">) {
     setSelectedOutputModes(modes);
     if (currentPlanVersion !== null) void handleExecutePlan(currentPlanVersion, modes);
@@ -1048,10 +1059,14 @@ export default function App() {
                       : currentRun.interrupt_payload.kind === "plan_ready" ? "plan_ready" : undefined,
                     problem_definition: (currentRun.interrupt_payload.problem_definition as Record<string, unknown> | undefined) ?? undefined,
                     candidates: Array.isArray(currentRun.interrupt_payload.candidates) ? currentRun.interrupt_payload.candidates as Array<Record<string, unknown>> : [],
+                    repository_snapshot: (currentRun.interrupt_payload.repository_snapshot as Record<string, unknown> | undefined) ?? undefined,
+                    repository_snapshot_id: typeof currentRun.interrupt_payload.repository_snapshot_id === "number" ? currentRun.interrupt_payload.repository_snapshot_id : undefined,
                   }
                 : null
             }
             onProblemConfirm={handleProblemConfirm}
+            onRepositorySelection={handleRepositorySelection}
+            onRepositoryReview={handleRepositoryReview}
             onCandidateSelection={handleCandidateSelection}
             onOutputModes={handleOutputModes}
             toolApprovalPrompt={currentRun?.interrupt_payload?.kind === "tool_approval" ? currentRun.interrupt_payload : null}
@@ -1088,6 +1103,7 @@ export default function App() {
                     embedded
                   />
                 ) : null}
+                {latestProject?.artifacts?.length ? <ArtifactPanel artifacts={latestProject.artifacts} /> : null}
               </>
             }
           />

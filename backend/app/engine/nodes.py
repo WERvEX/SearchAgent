@@ -10,7 +10,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from app.core.events import get_event_bus
-from app.db.models import AgentTask, ResearchCandidate, ResearchProject, Source, Step, TraceRun
+from app.db.models import AgentTask, RepositorySnapshot, ResearchCandidate, ResearchProject, Source, Step, TraceRun
 from app.engine.context import EngineContext
 from app.engine.state import ResearchState
 from app.services.settings_service import get_preference
@@ -160,19 +160,14 @@ def _development_plan_prompt(state: ResearchState) -> str:
     return (
         "You are a development kickoff planner. Return JSON only. Based on the confirmed problem definition "
         "and selected candidates, create a decision-complete implementation research plan with ready:true, "
-        "summary, steps, search_tasks, verification_tasks, risks, and candidates. Each step needs seq, title, "
-        "description, and status. Explain how adopted projects would be forked/pulled and used, but never ask "
+        "summary, steps, search_tasks, verification_tasks, risks, candidates, change_map, interfaces, "
+        "data_changes, rollback, and unresolved_decisions. Each step needs seq, stable id, title, description, "
+        "status, depends_on, change_ids, acceptance_criteria, test_commands, risks, rollback, and evidence_refs. "
+        "Each change_map item needs id, action(create|modify|delete), path, purpose, affected_components, "
+        "acceptance_criteria, risk, and repository evidence_refs. Existing paths must come from the supplied "
+        "repository snapshot; mark new paths as create. Explain how adopted projects would be forked/pulled and used, but never ask "
         "to execute installation or code changes. "
     )
-
-
-def _discover_development_candidates(objective: str) -> list[dict]:
-    from app.tools.github import search_github_repositories
-
-    try:
-        return list(search_github_repositories(objective, count=6).get("candidates", []))
-    except Exception:
-        return []
 
 
 def _run_async(value: Any) -> Any:
@@ -340,6 +335,59 @@ def _mark_acceptance_criteria(steps: list[dict], findings: list[dict]) -> list[d
     return updated_steps
 
 
+def _research_tasks(state: ResearchState) -> list[dict]:
+    plan = state.get("plan") or {}
+    raw = plan.get("search_tasks") if isinstance(plan.get("search_tasks"), list) else []
+    if not raw:
+        raw = state.get("steps") or []
+    tasks = []
+    for index, item in enumerate(raw[:3], start=1):
+        if isinstance(item, dict):
+            title = str(item.get("title") or item.get("query") or f"Research task {index}")
+            query = str(item.get("query") or item.get("description") or title)
+        else:
+            title = str(item)
+            query = title
+        tasks.append({"id": f"research_{index:02d}", "title": title, "query": query})
+    return tasks or [{"id": "research_01", "title": "Research objective", "query": str(state.get("objective") or "")}]
+
+
+def _assess_evidence(state: ResearchState, findings: list[dict]) -> tuple[list[dict], list[str]]:
+    assessed = []
+    issues = []
+    for finding in findings:
+        url = str(finding.get("url") or "")
+        excerpt = str(finding.get("snippet") or finding.get("content") or "").strip()
+        supported = url.startswith(("http://", "https://")) and bool(excerpt) and not excerpt.startswith("Error fetching ")
+        assessed.append({
+            **finding,
+            "verified": supported,
+            "verification_status": "supported" if supported else "uncertain",
+            "verification_reason": "Source URL and decision-relevant excerpt are present." if supported else "Missing a usable public URL or evidence excerpt.",
+        })
+    supported = [item for item in assessed if item["verified"]]
+    supported_count = len(supported)
+    explicit_tasks = (state.get("plan") or {}).get("search_tasks")
+    if isinstance(explicit_tasks, list) and explicit_tasks:
+        task_ids = [item["id"] for item in _research_tasks(state)]
+        covered_ids = {str(item.get("research_task_id")) for item in supported if item.get("research_task_id")}
+        missing_ids = [task_id for task_id in task_ids if task_id not in covered_ids]
+        if missing_ids:
+            issues.append(f"Planned research tasks without usable evidence: {', '.join(missing_ids)}.")
+    elif supported_count < 1:
+        issues.append("No usable evidence was collected for the research objective.")
+    if state.get("workflow_mode") == "development_start":
+        candidates = {str(item.get("candidate_key")): item for item in state.get("candidates") or [] if isinstance(item, dict)}
+        for decision in state.get("candidate_decisions") or []:
+            if not isinstance(decision, dict) or decision.get("decision") != "adopt":
+                continue
+            candidate = candidates.get(str(decision.get("candidate_key"))) or {}
+            missing = [field for field in ("license", "version_or_branch") if not candidate.get(field)]
+            if missing:
+                issues.append(f"Adopted candidate {decision.get('candidate_key')} is missing {', '.join(missing)}.")
+    return assessed, issues
+
+
 def _report_references(findings: list[dict], *, chinese: bool = True) -> list[str]:
     lines = ["", "## 参考来源" if chinese else "## References", ""]
     for idx, finding in enumerate(findings, start=1):
@@ -454,20 +502,7 @@ def _synthesize_report(ctx: EngineContext, state: ResearchState) -> str | None:
     )
     llm = _get_llm(ctx)
     content = _llm_content(llm.invoke(base_prompt))
-    normalized = _normalize_report_analysis(content, len(evidence))
-    if normalized:
-        return normalized
-
-    retry_prompt = (
-        f"{base_prompt}\n\n"
-        "The previous draft did not satisfy the required citation format. Rewrite it now. "
-        "Every factual paragraph must contain at least one citation such as [^1], using "
-        f"only IDs 1 through {len(evidence)}. Use Markdown headings beginning with ##."
-    )
-    return _normalize_report_analysis(
-        _llm_content(llm.invoke(retry_prompt)),
-        len(evidence),
-    )
+    return _normalize_report_analysis(content, len(evidence))
 
 
 def make_nodes(ctx: EngineContext):
@@ -488,15 +523,80 @@ def make_nodes(ctx: EngineContext):
             }
         )
 
+    def research_candidates(state: ResearchState) -> list[dict]:
+        from app.tools import registry
+
+        trace_id = state.get("trace_id")
+        valid_trace = isinstance(trace_id, str) and ctx.session.get(TraceRun, trace_id) is not None
+        task = None
+        if valid_trace:
+            task = AgentTask(
+                project_id=state["project_id"], trace_id=trace_id, role="researcher",
+                title="Discover reusable projects, services, and documentation", status="running",
+                input_json={"objective": state.get("objective"), "phase": "candidate_discovery"},
+            )
+            ctx.session.add(task)
+            ctx.session.commit()
+        tool_result = _run_async(registry.get_research_tools(ctx.session, include_development=True))
+        tools = tool_result.get("tools", [])
+        tools_by_name = {_tool_name(tool): tool for tool in tools}
+        llm = _get_llm(ctx)
+        bound_llm = llm.bind_tools(tools) if hasattr(llm, "bind_tools") else llm
+        response = bound_llm.invoke(
+            "You are the research agent. Use the available tools to discover reusable public repositories, "
+            "services, and official documentation for this development objective. Do not invent URLs. "
+            "Return tool calls only when tools are available.\n"
+            f"Objective: {state.get('objective', '')}\n"
+            f"Problem: {json.dumps(state.get('problem_definition') or {}, ensure_ascii=False)}"
+        )
+        calls = []
+        for call in _response_tool_calls(response)[:3]:
+            name = _tool_call_name(call)
+            if name in tools_by_name:
+                calls.append((name, tools_by_name[name], _tool_call_args(call)))
+        if not calls:
+            for preferred in ("github_repository_search", "bocha_web_search", "search_web"):
+                if preferred in tools_by_name:
+                    args = {"query": str(state.get("objective") or "")}
+                    if preferred == "github_repository_search":
+                        args["count"] = 6
+                    calls.append((preferred, tools_by_name[preferred], args))
+                    break
+        candidates = []
+        try:
+            for name, tool, args in calls:
+                result = execute_tool(
+                    ctx.session, project_id=state["project_id"], trace_id=trace_id,
+                    agent_role="researcher", tool_name=name, args=args, tool=tool, invoke=_invoke_tool,
+                    publish=lambda event_type, **details: publish_progress(event_type, state, **details),
+                    task_id=task.id if task is not None else None,
+                ) if valid_trace else _invoke_tool(tool, args)
+                if isinstance(result, dict) and isinstance(result.get("candidates"), list):
+                    candidates.extend(item for item in result["candidates"] if isinstance(item, dict))
+                else:
+                    candidates.extend({
+                        "candidate_key": item["url"], "source_type": "web", "title": item["title"],
+                        "url": item["url"], "description": item.get("snippet"), "license": None,
+                        "version_or_branch": None, "activity": None, "evidence_refs": [item["url"]],
+                    } for item in _iter_source_items(result, tool_name=name, args=args))
+        finally:
+            if task is not None:
+                task.status = "completed"
+                task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+                task.output_json = {"candidate_count": len(candidates)}
+                ctx.session.commit()
+        deduped = []
+        seen = set()
+        for item in candidates:
+            url = str(item.get("url") or "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            deduped.append(item)
+        return deduped[:12]
+
     def plan_conversation(state: ResearchState) -> dict:
         from app.engine.persistence import persist_plan_version
-
-        planner_task = None
-        trace_id = state.get("trace_id")
-        if isinstance(trace_id, str) and isinstance(state.get("project_id"), int) and ctx.session.get(ResearchProject, state["project_id"]) is not None and ctx.session.get(TraceRun, trace_id) is not None:
-            planner_task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="planner", title="Clarify objective and build plan", status="running", input_json={"message": _latest_user_message(state.get("messages", []))})
-            ctx.session.add(planner_task)
-            ctx.session.commit()
 
         latest_user = _latest_user_message(state.get("messages", []))
         current_objective = str(state.get("objective") or "").strip()
@@ -504,6 +604,14 @@ def make_nodes(ctx: EngineContext):
         development = state.get("workflow_mode") == "development_start"
         problem = state.get("problem_definition") or {}
         candidate_selection_done = bool(state.get("candidate_selection_done"))
+        repository_selection_done = bool(state.get("repository_selection_done"))
+        planner_task = None
+        trace_id = state.get("trace_id")
+        planner_needed = not development or not problem.get("confirmed") or (repository_selection_done and bool(state.get("repository_confirmed")) and candidate_selection_done)
+        if planner_needed and isinstance(trace_id, str) and isinstance(state.get("project_id"), int) and ctx.session.get(ResearchProject, state["project_id"]) is not None and ctx.session.get(TraceRun, trace_id) is not None:
+            planner_task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="planner", title="Clarify objective and build plan", status="running", input_json={"message": latest_user})
+            ctx.session.add(planner_task)
+            ctx.session.commit()
         if development and not problem.get("confirmed"):
             prompt = (
                 f"{_development_problem_prompt(state)}\n"
@@ -512,15 +620,34 @@ def make_nodes(ctx: EngineContext):
                 f"Current objective: {current_objective}\n"
                 f"Current problem definition: {json.dumps(problem, ensure_ascii=False)}"
             )
+        elif development and not repository_selection_done:
+            return {
+                "development_phase": "repository_selection",
+                "planner_message": "请选择一个现有代码库进行只读分析，或跳过此步骤。" if _is_chinese(state) else "Choose an existing repository for read-only analysis, or skip this step.",
+                "planner_questions": [], "plan_ready": False, "approved": False,
+            }
+        elif development and state.get("repository_mode") == "existing" and not state.get("repository_confirmed"):
+            return {
+                "development_phase": "repository_review",
+                "planner_message": "请确认代码库扫描结果，或调整排除规则后重新扫描。" if _is_chinese(state) else "Confirm the repository snapshot, or adjust exclusions and rescan.",
+                "planner_questions": [], "plan_ready": False, "approved": False,
+            }
         elif development and not candidate_selection_done:
-            prompt = (
-                "Return JSON only with ready:false, phase:'candidate_selection', message, and candidates. "
-                "Candidates must be objects with candidate_key, source_type, title, url, description, license, "
-                "version_or_branch, activity, and evidence_refs.\n"
-                f"{_response_language_instruction(state)}\n"
-                f"Objective: {current_objective}\n"
-                f"Problem definition: {json.dumps(problem, ensure_ascii=False)}"
-            )
+            normalized = research_candidates(state)
+            for item in normalized:
+                existing = ctx.session.query(ResearchCandidate).filter_by(
+                    project_id=state.get("project_id"), candidate_key=str(item.get("candidate_key") or item.get("url"))
+                ).one_or_none()
+                if existing is None and isinstance(state.get("project_id"), int):
+                    ctx.session.add(ResearchCandidate(
+                        project_id=state["project_id"], candidate_key=str(item.get("candidate_key") or item.get("url")),
+                        source_type=str(item.get("source_type") or "web"), title=str(item.get("title") or item.get("url")),
+                        url=str(item["url"]), description=item.get("description"), license=item.get("license"),
+                        version_or_branch=item.get("version_or_branch"), activity=json.dumps(item.get("activity"), ensure_ascii=False) if isinstance(item.get("activity"), dict) else item.get("activity"),
+                        evidence_json={"refs": item.get("evidence_refs") or []},
+                    ))
+            ctx.session.commit()
+            return {"candidates": normalized, "development_phase": "candidate_selection", "planner_message": "请选择候选项目的参考或采用方式。" if _is_chinese(state) else "Choose whether to reference or adopt each candidate.", "planner_questions": [], "plan_ready": False, "candidate_selection_done": False}
         elif development:
             prompt = (
                 f"{_development_plan_prompt(state)}\n"
@@ -529,6 +656,7 @@ def make_nodes(ctx: EngineContext):
                 f"Problem definition: {json.dumps(problem, ensure_ascii=False)}\n"
                 f"Candidate decisions: {json.dumps(state.get('candidate_decisions', []), ensure_ascii=False)}\n"
                 f"Candidates: {json.dumps(state.get('candidates', []), ensure_ascii=False)}\n"
+                f"Repository snapshot: {json.dumps(state.get('repository_summary') or {}, ensure_ascii=False)}\n"
                 f"Previous plan: {json.dumps(previous_plan, ensure_ascii=False)}"
             )
         else:
@@ -567,26 +695,6 @@ def make_nodes(ctx: EngineContext):
             and isinstance(parsed.get("summary"), str)
             and isinstance(parsed.get("options"), list)
         )
-
-        if development and not candidate_selection_done and problem.get("confirmed"):
-            candidates = parsed.get("candidates") if isinstance(parsed, dict) and isinstance(parsed.get("candidates"), list) else []
-            if not candidates:
-                candidates = _discover_development_candidates(current_objective or latest_user)
-            normalized = [item for item in candidates if isinstance(item, dict) and item.get("url")][:12]
-            for item in normalized:
-                existing = ctx.session.query(ResearchCandidate).filter_by(
-                    project_id=state.get("project_id"), candidate_key=str(item.get("candidate_key") or item.get("url"))
-                ).one_or_none()
-                if existing is None and isinstance(state.get("project_id"), int):
-                    ctx.session.add(ResearchCandidate(
-                        project_id=state["project_id"], candidate_key=str(item.get("candidate_key") or item.get("url")),
-                        source_type=str(item.get("source_type") or "web"), title=str(item.get("title") or item.get("url")),
-                        url=str(item["url"]), description=item.get("description"), license=item.get("license"),
-                        version_or_branch=item.get("version_or_branch"), activity=json.dumps(item.get("activity"), ensure_ascii=False) if isinstance(item.get("activity"), dict) else item.get("activity"),
-                        evidence_json={"refs": item.get("evidence_refs") or []},
-                    ))
-            ctx.session.commit()
-            return {"candidates": normalized, "development_phase": "candidate_selection", "planner_message": str((parsed.get("message") if isinstance(parsed, dict) else "") or "请选择候选项目的参考或采用方式。"), "planner_questions": [], "plan_ready": False, "candidate_selection_done": False}
 
         if development and not problem.get("confirmed"):
             problem_definition = dict(parsed.get("problem_definition") or problem) if isinstance(parsed, dict) else dict(problem)
@@ -664,7 +772,7 @@ def make_nodes(ctx: EngineContext):
                 )),
                 "steps": steps if isinstance(steps, list) and steps else _fallback_steps(chinese=_is_chinese(state)),
             }
-            for key in ("search_tasks", "verification_tasks", "risks", "candidates"):
+            for key in ("search_tasks", "verification_tasks", "risks", "candidates", "change_map", "interfaces", "data_changes", "rollback", "unresolved_decisions"):
                 if isinstance(parsed.get(key), list):
                     plan[key] = parsed[key]
             message = str(parsed.get("message") or (
@@ -689,6 +797,9 @@ def make_nodes(ctx: EngineContext):
             "steps": plan["steps"],
         }
         if development:
+            plan["repository_snapshot_id"] = state.get("repository_snapshot_id")
+            if state.get("repository_summary"):
+                plan["repository_fingerprint"] = state["repository_summary"].get("fingerprint")
             next_state.update({"problem_definition": {**problem_definition, "confirmed": True}, "development_phase": "plan_ready"})
         version = persist_plan_version(ctx.session, next_state)
         publish_progress(
@@ -759,7 +870,7 @@ def make_nodes(ctx: EngineContext):
         development = state.get("workflow_mode") == "development_start"
         phase = state.get("development_phase") or ("plan_ready" if ready else "problem_framing")
         payload = {
-            "kind": "plan_ready" if ready else ("candidate_selection" if phase == "candidate_selection" else "problem_framing" if development else "planning_input"),
+            "kind": "plan_ready" if ready else (phase if phase in {"candidate_selection", "repository_selection", "repository_review"} else "problem_framing" if development else "planning_input"),
             "phase": phase,
             "message": state.get("planner_message") or (
                 (
@@ -780,6 +891,11 @@ def make_nodes(ctx: EngineContext):
         if development:
             payload["problem_definition"] = state.get("problem_definition") or {}
             payload["candidates"] = state.get("candidates") or []
+            if phase == "repository_review":
+                summary = dict(state.get("repository_summary") or {})
+                summary.pop("files", None)
+                payload["repository_snapshot"] = summary
+                payload["repository_snapshot_id"] = state.get("repository_snapshot_id")
         if ready:
             payload.update({
                 "plan": state.get("plan"),
@@ -790,6 +906,8 @@ def make_nodes(ctx: EngineContext):
             raise ValueError("Expected a planning response")
 
         kind = response.get("kind")
+        if kind == "problem_message":
+            kind = "planning_message"
         if kind == "clarification":
             kind = "planning_message"
             response = {**response, "message": response.get("answer")}
@@ -812,12 +930,92 @@ def make_nodes(ctx: EngineContext):
                     candidate.decision = str(item["decision"])
             ctx.session.commit()
             return {"candidate_decisions": decisions, "candidate_selection_done": True, "development_phase": "plan_generation", "messages": [{"role": "user", "content": json.dumps(decisions, ensure_ascii=False)}]}
+        if kind == "repository_selection":
+            if response.get("skip") is True:
+                project = ctx.session.get(ResearchProject, state.get("project_id"))
+                if project is not None:
+                    project.repository_mode = "none"
+                    ctx.session.commit()
+                return {
+                    "repository_mode": "none", "repository_selection_done": True,
+                    "repository_confirmed": True, "development_phase": "candidate_selection",
+                    "messages": [{"role": "user", "content": "跳过代码库分析。"}],
+                }
+            from app.services.repository_analysis import RepositoryScanError, scan_repository
+            repository_path = str(response.get("repository_path") or "").strip()
+            publish_progress("research.repository_scan_started", state)
+            try:
+                summary = scan_repository(
+                    repository_path, objective=str(state.get("objective") or ""),
+                    exclude_patterns=response.get("exclude_patterns") or [],
+                )
+            except RepositoryScanError as exc:
+                return {
+                    "development_phase": "repository_selection",
+                    "planner_message": str(exc), "repository_selection_done": False,
+                }
+            snapshot = RepositorySnapshot(
+                project_id=state["project_id"], repository_path=repository_path,
+                fingerprint=summary["fingerprint"], status=summary["scan_status"], snapshot_json=summary,
+            )
+            ctx.session.add(snapshot)
+            ctx.session.flush()
+            project = ctx.session.get(ResearchProject, state["project_id"])
+            if project is not None:
+                project.repository_mode = "existing"
+                project.repository_snapshot_id = snapshot.id
+            ctx.session.commit()
+            publish_progress(
+                "research.repository_scan_partial" if summary["scan_status"] == "partial" else "research.repository_scan_completed",
+                state, repository_snapshot_id=snapshot.id, file_count=len(summary.get("files", [])),
+            )
+            return {
+                "repository_mode": "existing", "repository_path": repository_path,
+                "repository_snapshot_id": snapshot.id, "repository_summary": summary,
+                "repository_selection_done": True, "repository_confirmed": False,
+                "development_phase": "repository_review",
+            }
+        if kind == "repository_review":
+            if response.get("confirmed"):
+                publish_progress("research.repository_context_confirmed", state, repository_snapshot_id=state.get("repository_snapshot_id"))
+                return {
+                    "repository_confirmed": True, "development_phase": "candidate_selection",
+                    "messages": [{"role": "user", "content": "代码库上下文已确认。"}],
+                }
+            from app.services.repository_analysis import RepositoryScanError, scan_repository
+            publish_progress("research.repository_scan_started", state, repository_snapshot_id=state.get("repository_snapshot_id"))
+            try:
+                summary = scan_repository(
+                    str(state.get("repository_path") or ""), objective=str(state.get("objective") or ""),
+                    exclude_patterns=response.get("exclude_patterns") or [],
+                )
+            except RepositoryScanError as exc:
+                return {"development_phase": "repository_review", "planner_message": str(exc)}
+            snapshot = RepositorySnapshot(
+                project_id=state["project_id"], repository_path=str(state.get("repository_path") or ""),
+                fingerprint=summary["fingerprint"], status=summary["scan_status"], snapshot_json=summary,
+            )
+            ctx.session.add(snapshot)
+            ctx.session.flush()
+            project = ctx.session.get(ResearchProject, state["project_id"])
+            if project is not None:
+                project.repository_snapshot_id = snapshot.id
+            ctx.session.commit()
+            publish_progress(
+                "research.repository_scan_partial" if summary["scan_status"] == "partial" else "research.repository_scan_completed",
+                state, repository_snapshot_id=snapshot.id, file_count=len(summary.get("files", [])),
+            )
+            return {"repository_snapshot_id": snapshot.id, "repository_summary": summary, "repository_confirmed": False, "development_phase": "repository_review"}
         if kind == "problem_confirm":
             if not response.get("confirmed"):
                 return {"messages": [{"role": "user", "content": str(response.get("feedback") or "请继续补充问题定义。") }], "planner_message": None}
             problem = dict(state.get("problem_definition") or {})
             problem["confirmed"] = True
-            return {"problem_definition": problem, "development_phase": "candidate_selection", "messages": [{"role": "user", "content": "问题定义已确认。"}]}
+            project = ctx.session.get(ResearchProject, state.get("project_id"))
+            if project is not None:
+                project.problem_definition_json = problem
+                ctx.session.commit()
+            return {"problem_definition": problem, "development_phase": "repository_selection", "messages": [{"role": "user", "content": "问题定义已确认。"}]}
         if kind in {"problem_answers", "planning_answers"}:
             message = str(response.get("message") or "").strip()
             if not message:
@@ -868,17 +1066,19 @@ def make_nodes(ctx: EngineContext):
             )
         max_sources = _get_max_sources(ctx)
         trace_id = state.get("trace_id")
+        round_number = int(state.get("research_round") or 0) + 1
+        planned_research = _research_tasks(state)
         agent_tasks: list[dict] = []
         if not isinstance(trace_id, str) or ctx.session.get(TraceRun, trace_id) is None:
             trace_id = None
         if trace_id:
-            for index, step in enumerate(steps[:3], start=1):
-                task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="retriever", title=str(step.get("title") or f"Retrieval task {index}"), status="running", input_json={"step": step})
+            for item in planned_research:
+                task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="researcher", title=item["title"], status="running", input_json={"research_task": item, "round": round_number})
                 ctx.session.add(task)
                 ctx.session.flush()
                 agent_tasks.append({"id": task.id, "role": task.role, "title": task.title, "status": task.status})
             ctx.session.commit()
-        coordinator_span = start_span(ctx.session, trace_id, "agent:coordinator", kind="agent", attributes={"role": "coordinator", "parallel_limit": 3}, input_value=state.get("objective")) if trace_id else None
+        research_span = start_span(ctx.session, trace_id, "agent:researcher", kind="agent", attributes={"role": "researcher", "parallel_limit": 3, "round": round_number}, input_value=planned_research) if trace_id else None
         tool_result = _run_async(
             registry.get_research_tools(ctx.session, include_development=True)
             if state.get("workflow_mode") == "development_start"
@@ -894,7 +1094,10 @@ def make_nodes(ctx: EngineContext):
             "Use search-capable tools for discovery when available, do not invent URLs, "
             "and satisfy any minimum source-count requirement stated in the objective. "
             f"Objective: {state.get('objective', '')}\n"
-            f"Steps: {json.dumps(state.get('steps', []), ensure_ascii=False)}\n"
+            f"Research tasks: {json.dumps(planned_research, ensure_ascii=False)}\n"
+            f"Verification tasks: {json.dumps((state.get('plan') or {}).get('verification_tasks') or [], ensure_ascii=False)}\n"
+            f"Evidence gaps from the previous round: {json.dumps((state.get('evidence_gate') or {}).get('issues') or [], ensure_ascii=False)}\n"
+            "For verification, prefer official or primary sources and fetch the relevant page when a search result alone is insufficient.\n"
             f"Return at most {max_sources} useful sources."
         )
         response = bound_llm.invoke(prompt)
@@ -912,30 +1115,34 @@ def make_nodes(ctx: EngineContext):
             # Interrupts stay on the graph thread; once every call is allowed, actual I/O runs in up to three workers.
             from app.db import session as db_session
             from app.tools.policy import decide
-            for name, tool, args in tool_calls:
-                decision = decide(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args)
+            for call_index, (name, tool, args) in enumerate(tool_calls):
+                decision = decide(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="researcher", tool_name=name, args=args)
                 if decision.action != "allow":
-                    execute_tool(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details))
-            def _parallel_call(item):
+                    task_id = agent_tasks[min(call_index, len(agent_tasks) - 1)]["id"] if agent_tasks else None
+                    execute_tool(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="researcher", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details), task_id=task_id)
+            def _parallel_call(indexed_item):
+                call_index, item = indexed_item
                 name, tool, args = item
+                task_id = agent_tasks[min(call_index, len(agent_tasks) - 1)]["id"] if agent_tasks else None
                 with db_session.SessionLocal() as worker_session:
-                    return execute_tool(worker_session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details))
+                    return execute_tool(worker_session, project_id=state["project_id"], trace_id=trace_id, agent_role="researcher", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details), task_id=task_id)
             with ThreadPoolExecutor(max_workers=min(3, len(tool_calls))) as executor:
-                parallel_results = list(executor.map(_parallel_call, tool_calls))
+                parallel_results = list(executor.map(_parallel_call, enumerate(tool_calls)))
 
         for index, (name, tool, args) in enumerate(tool_calls):
             if len(findings) >= max_sources:
                 break
-            task_id = agent_tasks[0]["id"] if agent_tasks else None
-            publish_progress("research.tool_started", state, tool_name=name, agent_role="retriever")
+            task_id = agent_tasks[min(index, len(agent_tasks) - 1)]["id"] if agent_tasks else None
             result = parallel_results[index] if parallel_results is not None else (
-                execute_tool(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="retriever", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details))
+                execute_tool(ctx.session, project_id=state["project_id"], trace_id=trace_id, agent_role="researcher", tool_name=name, args=args, tool=tool, invoke=_invoke_tool, publish=lambda event_type, **details: publish_progress(event_type, state, **details), task_id=task_id)
                 if trace_id else _invoke_tool(tool, args)
             )
             collected_before = len(findings)
             for source in _iter_source_items(result, tool_name=name, args=args):
                 if len(findings) >= max_sources:
                     break
+                if task_id is not None:
+                    source["research_task_id"] = planned_research[min(index, len(planned_research) - 1)]["id"]
                 findings.append(source)
                 ctx.session.add(
                     Source(
@@ -955,77 +1162,64 @@ def make_nodes(ctx: EngineContext):
                     source_url=source["url"],
                     tool_name=name,
                 )
-            publish_progress(
-                "research.tool_completed",
-                state,
-                tool_name=name,
-                agent_role="retriever",
-                source_count=len(findings) - collected_before,
-            )
+            if task_id is not None:
+                task = ctx.session.get(AgentTask, task_id)
+                if task is not None:
+                    task.output_json = {"source_count": len(findings) - collected_before, "research_task_id": planned_research[min(index, len(planned_research) - 1)]["id"]}
 
         ctx.session.commit()
         if not findings:
-            if coordinator_span:
-                finish_span(ctx.session, coordinator_span, status="error", error="No usable sources")
-            raise RuntimeError(
-                "No usable sources were collected. Configure a search-capable MCP server "
-                "or verify that the requested public sources are reachable."
-            )
+            if not state.get("allow_supplemental_research") or round_number >= 2:
+                if research_span:
+                    finish_span(ctx.session, research_span, status="error", error="No usable sources")
+                raise RuntimeError(
+                    "No usable sources were collected. Configure a search-capable MCP server "
+                    "or verify that the requested public sources are reachable."
+                )
         publish_progress(
             "research.sources_collected",
             state,
             source_count=len(findings),
             tool_count=len(tools_by_name),
         )
-        for step in steps:
-            if step.get("status") != "running":
-                step["status"] = "running"
-                persist_step_status(state, step, "running")
-                publish_progress(
-                    "research.step_started",
-                    state,
-                    step_seq=step.get("seq"),
-                    step_title=step.get("title"),
-                )
-            step["status"] = "completed"
-            persist_step_status(state, step, "completed")
-            publish_progress(
-                "research.step_completed",
-                state,
-                step_seq=step.get("seq"),
-                step_title=step.get("title"),
-            )
-        for task in ctx.session.query(AgentTask).filter(AgentTask.project_id == state["project_id"], AgentTask.trace_id == trace_id).all():
+        task_ids = [item["id"] for item in agent_tasks]
+        for task in ctx.session.query(AgentTask).filter(AgentTask.id.in_(task_ids)).all() if task_ids else []:
             task.status = "completed"
             task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
-            task.output_json = {"source_count": len(findings)}
+            task.output_json = task.output_json or {"source_count": 0}
         ctx.session.commit()
-        if coordinator_span:
-            finish_span(ctx.session, coordinator_span, output_value={"source_count": len(findings)})
-        return {"findings": findings, "steps": steps}
+        if research_span:
+            finish_span(ctx.session, research_span, output_value={"source_count": len(findings), "round": round_number})
+        return {"findings": findings, "steps": steps, "research_round": round_number}
 
     def aggregate_evidence(state: ResearchState) -> dict:
         findings = _dedupe_findings(state.get("findings", []))
         trace_id = state.get("trace_id")
-        verifier_span = start_span(ctx.session, trace_id, "agent:verifier", kind="agent", attributes={"role": "verifier"}, input_value={"finding_count": len(findings)}) if isinstance(trace_id, str) and ctx.session.get(TraceRun, trace_id) is not None else None
-        verified = []
-        for finding in findings:
-            if finding.get("url"):
-                verified.append({**finding, "verified": True})
+        gate_span = start_span(ctx.session, trace_id, "stage:evidence_gate", kind="internal", attributes={"deterministic": True}, input_value={"finding_count": len(findings)}) if isinstance(trace_id, str) and ctx.session.get(TraceRun, trace_id) is not None else None
+        assessed, issues = _assess_evidence(state, findings)
+        verified = [item for item in assessed if item.get("verified")]
+        needs_supplement = (
+            bool(issues)
+            and bool(state.get("allow_supplemental_research"))
+            and int(state.get("research_round") or 0) < 2
+        )
         steps = _mark_acceptance_criteria(state.get("steps", []), verified)
-        if verifier_span:
-            finish_span(ctx.session, verifier_span, output_value={"verified_count": len(verified)})
-        return {"findings": findings, "verified_findings": verified, "steps": steps}
+        if not needs_supplement:
+            for step in steps:
+                step["status"] = "completed"
+                persist_step_status(state, step, "completed")
+                publish_progress("research.step_completed", state, step_seq=step.get("seq"), step_title=step.get("title"))
+        gate = {"status": "needs_supplement" if needs_supplement else "passed" if not issues else "partial", "needs_supplement": needs_supplement, "issues": issues, "supported_count": len(verified), "total_count": len(assessed)}
+        if gate_span:
+            finish_span(ctx.session, gate_span, output_value=gate)
+        return {"findings": assessed, "verified_findings": verified, "steps": steps, "evidence_gate": gate}
 
     def write_report(state: ResearchState) -> dict:
-        from app.engine.persistence import persist_report, sync_plan_and_steps
+        from app.engine.persistence import persist_artifact, persist_report, sync_plan_and_steps
+        from app.services.implementation_manifest import build_manifest, manifest_json, manifest_markdown
 
-        writer_task = None
         trace_id = state.get("trace_id")
-        if isinstance(trace_id, str) and isinstance(state.get("project_id"), int) and ctx.session.get(ResearchProject, state["project_id"]) is not None and ctx.session.get(TraceRun, trace_id) is not None:
-            writer_task = AgentTask(project_id=state["project_id"], trace_id=trace_id, role="writer", title="Synthesize verified evidence", status="running", input_json={"verified_count": len(state.get("verified_findings") or state.get("findings", []))})
-            ctx.session.add(writer_task)
-            ctx.session.commit()
+        output_span = start_span(ctx.session, trace_id, "stage:output", kind="internal", attributes={"llm_writer": True, "deterministic_manifest": state.get("workflow_mode") == "development_start"}, input_value={"verified_count": len(state.get("verified_findings") or [])}) if isinstance(trace_id, str) and ctx.session.get(TraceRun, trace_id) is not None else None
 
         try:
             analysis_md = _synthesize_report(ctx, state)
@@ -1039,13 +1233,24 @@ def make_nodes(ctx: EngineContext):
             ai_content = _build_ai_report(state)
             ai_report = persist_report(ctx.session, project_id=state["project_id"], content_text=ai_content, format="json")
             ai_report_id = ai_report.id
-        if writer_task is not None:
-            writer_task.status = "completed"
-            writer_task.completed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
-            writer_task.output_json = {"report_id": report.id, "ai_report_id": ai_report_id, "citation_count": report_md.count("[^")}
-            ctx.session.commit()
+        artifact_ids: list[int] = []
+        if state.get("workflow_mode") == "development_start":
+            manifest = build_manifest(state)
+            modes = state.get("output_modes") or ["human"]
+            if "human" in modes:
+                artifact_ids.append(persist_artifact(
+                    ctx.session, project_id=state["project_id"], plan_version=int(state.get("plan_version") or 1),
+                    format="md", content_text=manifest_markdown(manifest),
+                ).id)
+            if "ai" in modes:
+                artifact_ids.append(persist_artifact(
+                    ctx.session, project_id=state["project_id"], plan_version=int(state.get("plan_version") or 1),
+                    format="json", content_text=manifest_json(manifest),
+                ).id)
+        if output_span:
+            finish_span(ctx.session, output_span, output_value={"report_id": report.id, "ai_report_id": ai_report_id, "artifact_ids": artifact_ids, "citation_count": report_md.count("[^")})
         publish_progress("research.report_ready", state, report_id=report.id)
-        return {"report_md": report_md, "report_id": report.id, "ai_report_id": ai_report_id}
+        return {"report_md": report_md, "report_id": report.id, "ai_report_id": ai_report_id, "artifact_ids": artifact_ids}
 
     return {
         "plan_conversation": plan_conversation,

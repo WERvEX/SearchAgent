@@ -36,3 +36,23 @@ def test_policy_domain_matching_and_approval(session):
     blocked = decide(session, project_id=project.id, trace_id="trace-1", agent_role="retriever", tool_name="fetch_page", args={"url": "https://other.example/a"})
     assert allowed.action == "approval_required"
     assert blocked.action == "deny"
+
+
+def test_default_policies_migrate_legacy_retriever_rules_to_researcher(session):
+    from app.db.models import ToolPolicy
+    from app.tools.policy import create_policy, ensure_default_policies
+
+    create_policy(
+        session,
+        agent_role="retriever",
+        tool_name="custom_search",
+        allowed_domains=["example.com"],
+        require_approval=True,
+    )
+    ensure_default_policies(session)
+
+    migrated = session.query(ToolPolicy).filter_by(
+        agent_role="researcher", tool_name="custom_search"
+    ).one()
+    assert migrated.allowed_domains_json == ["example.com"]
+    assert migrated.require_approval is True

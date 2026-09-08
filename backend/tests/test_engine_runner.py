@@ -63,7 +63,7 @@ def session(app_home):
 def test_start_and_resume_research_runs_to_report_and_publishes_lifecycle_events(session, monkeypatch):
     from sqlalchemy import select
 
-    from app.db.models import Conversation, Message, Report, ResearchProject
+    from app.db.models import AgentTask, Conversation, Message, Report, ResearchProject, ToolCall
     from app.engine.runner import resume_research, start_research
     from app.engine import nodes, runner
     from app.core.events import EventBus
@@ -129,6 +129,13 @@ def test_start_and_resume_research_runs_to_report_and_publishes_lifecycle_events
     assert conv.status == "completed"
     assert len(reports) == 1
     assert reports[0].id == resumed["state"]["report_id"]
+
+    tasks = session.scalars(select(AgentTask).order_by(AgentTask.id)).all()
+    assert {task.role for task in tasks} == {"planner", "researcher"}
+    tool_calls = session.scalars(select(ToolCall).order_by(ToolCall.id)).all()
+    assert len(tool_calls) == 1
+    assert tool_calls[0].agent_role == "researcher"
+    assert tool_calls[0].task_id in {task.id for task in tasks if task.role == "researcher"}
 
     subscriber = bus.subscribe(replay_limit=20)
     events = list(bus._history)

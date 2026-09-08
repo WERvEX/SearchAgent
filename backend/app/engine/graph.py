@@ -13,6 +13,17 @@ def _route_after_planning_input(state: ResearchState) -> str:
     return "execute_research" if state.get("approved") else "plan_conversation"
 
 
+def _route_after_evidence_gate(state: ResearchState) -> str:
+    gate = state.get("evidence_gate") or {}
+    if (
+        state.get("allow_supplemental_research")
+        and gate.get("needs_supplement")
+        and int(state.get("research_round") or 0) < 2
+    ):
+        return "execute_research"
+    return "write_report"
+
+
 def compile_research_graph(ctx: EngineContext, *, checkpointer=None):
     nodes = make_nodes(ctx)
     builder = StateGraph(ResearchState)
@@ -34,7 +45,10 @@ def compile_research_graph(ctx: EngineContext, *, checkpointer=None):
         "execute_research": "execute_research",
     })
     builder.add_edge("execute_research", "aggregate_evidence")
-    builder.add_edge("aggregate_evidence", "write_report")
+    builder.add_conditional_edges("aggregate_evidence", _route_after_evidence_gate, {
+        "execute_research": "execute_research",
+        "write_report": "write_report",
+    })
     builder.add_edge("write_report", END)
 
     return builder.compile(checkpointer=checkpointer, interrupt_before=[])

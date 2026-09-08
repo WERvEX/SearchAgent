@@ -39,11 +39,14 @@ export type ConversationDetail = ConversationRead & {
     problem_definition?: Record<string, unknown> | null;
     candidates?: Array<Record<string, unknown>>;
     output_modes?: string[];
+    repository_mode?: "none" | "existing";
+    repository_snapshot_id?: number | null;
     created_at: string;
     latest_report_id: number | null;
     latest_report_version: number | null;
     plans?: PlanArtifact[];
     reports?: Array<{ id: number; project_id?: number; version: number; created_at: string }>;
+    artifacts?: ProjectArtifactSummary[];
   }>;
 };
 
@@ -60,6 +63,13 @@ export type PlanArtifact = {
   version: number;
   summary: string;
   steps: PlanStep[];
+  search_tasks?: Array<Record<string, unknown>>;
+  verification_tasks?: Array<Record<string, unknown>>;
+  risks?: Array<Record<string, unknown> | string>;
+  change_map?: Array<Record<string, unknown>>;
+  unresolved_decisions?: Array<Record<string, unknown>>;
+  repository_snapshot_id?: number | null;
+  repository_fingerprint?: string | null;
   created_at?: string;
 };
 
@@ -91,6 +101,22 @@ export type ResearchRunResponse = {
 };
 export type WorkflowMode = "research" | "development_start";
 export type OutputMode = "human" | "ai";
+
+export type ProjectArtifactSummary = {
+  id: number;
+  project_id?: number;
+  plan_version: number;
+  artifact_kind: string;
+  format: "md" | "json" | string;
+  created_at: string;
+};
+
+export type ProjectArtifactRead = ProjectArtifactSummary & {
+  project_id: number;
+  schema_version: string;
+  content_text: string;
+  file_path: string | null;
+};
 
 export type ResearchRunPhase =
   | "idle"
@@ -187,6 +213,10 @@ export type ResearchFollowUpResponse = {
 export const RESEARCH_LIFECYCLE_EVENT_TYPES = [
   "research.started",
   "research.plan_ready",
+  "research.repository_scan_started",
+  "research.repository_scan_completed",
+  "research.repository_scan_partial",
+  "research.repository_context_confirmed",
   "research.planning_message",
   "research.execution_started",
   "research.step_started",
